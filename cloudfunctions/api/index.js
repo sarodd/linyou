@@ -47,9 +47,16 @@ const SESSION_TTL = 7 * 86400000
 //             ② 数据库 admins 集合（{ openid, enabled }，便于动态增删而不必重新部署）
 // 测试通道开关：预览兜底与 e2e/edge 自检依赖 _testOpenid；上线设 false 关闭。
 const ALLOW_TEST_IDENTITY = process.env.ALLOW_TEST_IDENTITY !== 'false'
-// 预览期：测试通道身份默认视为管理员，保证未配域名 / 未登录时演示功能仍可用。
-// 上线设 PREVIEW_ADMIN=false 后，测试通道身份降为普通用户。
-const PREVIEW_ADMIN = process.env.PREVIEW_ADMIN !== 'false'
+// 预览身份是否具备管理员能力。默认关闭（安全优先）：
+// 登录失败回退到 preview 的用户只能浏览活动与自己订单，拿不到运营权限。
+// 需要纯预览演示时显式设 PREVIEW_ADMIN=true。
+const PREVIEW_ADMIN = process.env.PREVIEW_ADMIN === 'true'
+// 自检接口开关。e2eTest / edgeTest 会清空订单、邀请、佣金、流水、店员、日志等业务集合，
+// 一旦线上误触就是不可逆的数据事故，因此默认禁用，仅在明确需要时临时开启。
+const ALLOW_SELF_TEST = process.env.ALLOW_SELF_TEST === 'true'
+// 演示支付开关。未接入真实微信支付前，mockPay 允许前端直接把订单置为已支付；
+// 上线前设为 false 即可关闭该入口（mockRefund 同属渠道模拟，一并受此开关约束）。
+const MOCK_PAY_ENABLED = process.env.MOCK_PAY_ENABLED !== 'false'
 const ADMIN_OPENIDS = String(process.env.ADMIN_OPENIDS || '').split(',').map(s => s.trim()).filter(Boolean)
 // 预览期可提权的固定演示身份（前端登录兜底固定为 preview，自检脚本用 staff）。
 // 任意其他 _testOpenid 一律降为普通用户，堵住「随便编个身份就是管理员」的提权口子。
@@ -145,6 +152,10 @@ async function login(event) {
       createdAt: now(), expiresAt: now() + SESSION_TTL
     }
   })
+  // 顺手清理过期会话，避免 sessions 集合只增不减（尽力而为，不阻塞登录返回）
+  db.collection(C.SESSION).where({ expiresAt: _.lt(now()) }).limit(10).get()
+    .then(r => Promise.all((r.data || []).map(d => db.collection(C.SESSION).doc(d._id).remove().catch(() => {}))))
+    .catch(() => {})
   return { ok: true, token, openid: oid, expiresAt: now() + SESSION_TTL }
 }
 
@@ -358,9 +369,10 @@ async function seed(event, stores = []) {
   await ensureCollections()
   const activityId = 'act_linyou_v1'
   // 防覆盖：默认只在活动不存在时初始化演示数据。
-  // 自检脚本（e2eTest / edgeTest）需要回到出厂状态时显式传 force:true。
+  // force 仅用于自检重置，且必须同时开启 ALLOW_SELF_TEST；否则一律忽略，绝不覆盖线上配置。
   const exist = await db.collection(C.ACTIVITY).doc(activityId).get().catch(() => null)
-  if (exist && exist.data && !(event && event.force)) {
+  const force = !!(event && event.force) && ALLOW_SELF_TEST
+  if (exist && exist.data && !force) {
     return {
       ok: true, skipped: true,
       message: '活动已存在，跳过初始化（不会覆盖线上配置）'
@@ -475,19 +487,50 @@ const ACTIVITY_FIELDS = [
   'priceFen', 'originalPriceFen', 'inviteTarget',
   'orderDeadline', 'inviteDeadline', 'verifyDeadline', 'status'
 ]
+const ACTIVITY_TEXT_LIMITS = { brand: 20, name: 40, subtitle: 60, goodsName: 40, spec: 20 }
+const ACTIVITY_STATUS = ['ongoing', 'paused', 'ended']
+const MAX_FEN = 100000000 // 100 万元，防止误填把金额扩大几个数量级
+
 async function adminSaveActivity(event) {
   const patch = {}
   for (const f of ACTIVITY_FIELDS) {
     if (event[f] !== undefined) patch[f] = event[f]
   }
-  // 基本校验
-  if (patch.priceFen !== undefined && (!Number.isFinite(patch.priceFen) || patch.priceFen < 0)) {
-    return { ok: false, code: 'BAD_PRICE' }
-  }
-  if (patch.inviteTarget !== undefined && (!Number.isInteger(patch.inviteTarget) || patch.inviteTarget < 1)) {
-    return { ok: false, code: 'BAD_TARGET' }
-  }
   if (!Object.keys(patch).length) return { ok: false, code: 'EMPTY_PATCH' }
+
+  // 文本字段：必须为字符串，去首尾空格并限长（避免超长内容撑坏列表与页面）
+  for (const [k, max] of Object.entries(ACTIVITY_TEXT_LIMITS)) {
+    if (patch[k] === undefined) continue
+    if (typeof patch[k] !== 'string') return { ok: false, code: 'BAD_FIELD', field: k }
+    patch[k] = patch[k].trim().slice(0, max)
+  }
+
+  // 金额必须是整数分。挡住字符串，否则会入库成 "8800"，后续除法直接变 NaN
+  for (const k of ['priceFen', 'originalPriceFen']) {
+    if (patch[k] === undefined) continue
+    if (!Number.isInteger(patch[k]) || patch[k] < 0 || patch[k] > MAX_FEN) {
+      return { ok: false, code: 'BAD_PRICE', field: k }
+    }
+  }
+
+  if (patch.inviteTarget !== undefined) {
+    if (!Number.isInteger(patch.inviteTarget) || patch.inviteTarget < 1 || patch.inviteTarget > 100) {
+      return { ok: false, code: 'BAD_TARGET', message: '达标人数需为 1~100 的整数' }
+    }
+  }
+
+  // 时间戳统一为毫秒整数，并限制在 2020 ~ 2100 年之间（挡住 0、字符串、秒级时间戳）
+  for (const k of ['orderDeadline', 'inviteDeadline', 'verifyDeadline']) {
+    if (patch[k] === undefined) continue
+    if (!Number.isFinite(patch[k]) || patch[k] < 1577808000000 || patch[k] > 4102444800000) {
+      return { ok: false, code: 'BAD_DEADLINE', field: k }
+    }
+    patch[k] = Number(patch[k])
+  }
+
+  if (patch.status !== undefined && !ACTIVITY_STATUS.includes(patch.status)) {
+    return { ok: false, code: 'BAD_STATUS', message: '状态只能是 ongoing / paused / ended' }
+  }
   patch.updatedAt = now()
   // 更新时剔除 _id（文档库禁止更新 _id）
   const old = await db.collection(C.ACTIVITY).doc(ACTIVITY_ID).get().catch(() => null)
@@ -563,6 +606,9 @@ async function adminPosterChunk(event) {
     return { ok: false, code: 'BAD_CHUNK_META' }
   }
   if (!data) return { ok: false, code: 'EMPTY_CHUNK' }
+  // 单片不得超过 HTTP 网关承载范围（约 96KB），总片数也要有上界，避免被灌数据
+  if (data.length > 100 * 1024) return { ok: false, code: 'CHUNK_TOO_LARGE', message: '单片数据过大' }
+  if (total > 100) return { ok: false, code: 'TOO_MANY_CHUNKS', message: '分片数量过多' }
   const docId = uploadId + '_' + String(index).padStart(4, '0')
   const payload = { uploadId, index, total, data, updatedAt: now() }
   const old = await db.collection(CHUNK_COLL).doc(docId).get().catch(() => null)
@@ -578,10 +624,15 @@ async function adminPosterChunk(event) {
 async function adminPosterMerge(event) {
   const uploadId = String(event.uploadId || '')
   const mime = String(event.mime || 'image/jpeg')
+  const total = Number(event.total) || 0
   if (!uploadId) return { ok: false, code: 'NO_UPLOAD_ID' }
   const res = await db.collection(CHUNK_COLL).where({ uploadId: uploadId }).orderBy('index', 'asc').limit(200).get()
   const items = res.data || []
   if (!items.length) return { ok: false, code: 'NO_CHUNKS' }
+  // 片数必须与声明一致，否则拼接出的是残缺图片（前端会看到一张坏图而不是报错）
+  if (total && items.length !== total) {
+    return { ok: false, code: 'CHUNKS_INCOMPLETE', received: items.length, total }
+  }
   const fullBase64 = items.map(x => x.data).join('')
   const dataUrl = 'data:' + mime + ';base64,' + fullBase64
   // 体积保护：解码后超过 2MB 拒绝
@@ -659,38 +710,54 @@ async function adminDeleteStore(event) {
 async function createOrder(event) {
   const { storeId, inviteCode } = event
   const oid = openid()
-  const act = await db.collection(C.ACTIVITY).doc('act_linyou_v1').get()
+  const act = await db.collection(C.ACTIVITY).doc('act_linyou_v1').get().catch(() => null)
+  if (!act || !act.data) return { ok: false, code: 'NO_ACTIVITY', message: '活动还没有配置' }
 
   if (act.data.status !== 'ongoing') return { ok: false, code: 'ACTIVITY_ENDED' }
   if (now() > act.data.orderDeadline) return { ok: false, code: 'ORDER_DEADLINE_PASSED' }
 
   // 查找是否有进行中/已支付订单，占用下单资格
   const existed = await db.collection(C.ORDER).where({
-    buyer: oid, activityId: act.data._id, status: _.in(['pending_pay', 'paid', 'verified'])
+    buyer: oid, activityId: act.data._id, status: _.in(['pending_pay', 'paid', 'verified', 'cancel_processing'])
   }).get()
   if (existed.data.length > 0) return { ok: false, code: 'ALREADY_ORDERED', orderId: existed.data[0]._id }
 
-  // 校验邀请码（不允许自邀）
+  // 校验邀请码（不允许自邀；邀请已作废或过期的码不再计入）
   let inviterId = null
   if (inviteCode) {
     const inv = await db.collection(C.INVITATION).where({ code: String(inviteCode).toUpperCase() }).get()
     if (inv.data.length === 0) return { ok: false, code: 'INVALID_INVITE_CODE' }
-    if (inv.data[0].buyer === oid) return { ok: false, code: 'SELF_INVITE' }
-    if (inv.data[0].activityId !== act.data._id) return { ok: false, code: 'INVITE_ACTIVITY_MISMATCH' }
-    inviterId = inv.data[0]._id
+    const invitation = inv.data[0]
+    if (invitation.buyer === oid) return { ok: false, code: 'SELF_INVITE' }
+    if (invitation.activityId !== act.data._id) return { ok: false, code: 'INVITE_ACTIVITY_MISMATCH' }
+    if (invitation.status !== 'accumulating') {
+      return { ok: false, code: 'INVITE_CLOSED', message: '该邀请已结束，无法再计入' }
+    }
+    // 邀请有效期以邀请人下单时的快照为准，避免运营改配置改变已生效的规则
+    const invDeadline = invitation.deadlineSnapshot || act.data.inviteDeadline
+    if (invDeadline && now() > invDeadline) {
+      return { ok: false, code: 'INVITE_DEADLINE_PASSED', message: '该邀请已过截止时间' }
+    }
+    inviterId = invitation._id
   }
 
   const store = await db.collection(C.STORE).doc(storeId).get().catch(() => null)
   if (!store || !store.data) return { ok: false, code: 'STORE_NOT_FOUND' }
   if (store.data.stock <= 0) return { ok: false, code: 'OUT_OF_STOCK' }
 
-  const orderId = 'O' + now() + Math.floor(Math.random() * 1000)
+  // 订单号：时间戳 + 加密随机串，避免同毫秒并发碰撞（原实现用 Math.random 有概率重复）
+  const orderId = 'O' + now() + crypto.randomBytes(4).toString('hex')
   const order = {
     _id: orderId,
-    orderNo: 'LN' + now() + Math.floor(Math.random() * 900 + 100),
+    orderNo: 'LN' + now() + crypto.randomBytes(3).toString('hex').toUpperCase(),
     buyer: oid,
     activityId: act.data._id,
     ruleVersion: act.data.ruleVersion,
+    // 规则快照：达标人数 / 邀请截止 / 价格都以下单时刻为准。
+    // 运营之后调整活动配置，不会改变已下单用户的达标条件与退款金额。
+    inviteTargetSnapshot: act.data.inviteTarget,
+    inviteDeadlineSnapshot: act.data.inviteDeadline,
+    priceFenSnapshot: act.data.priceFen,
     goodsName: act.data.goodsName,
     spec: act.data.spec,
     amountFen: act.data.priceFen,
@@ -709,23 +776,48 @@ async function createOrder(event) {
 }
 
 // ---------- 支付成功（mock，替换点 1）----------
-// 真实场景：微信支付回调验签后调用本函数；此处由前端直接触发用于预览
+// 真实场景：微信支付回调验签后调用本函数；此处由前端直接触发用于预览。
+// 关键顺序：先原子占库存（带 stock>0 条件），再 CAS 订单状态。
+// 任何一步失败都不会留下「已付款但超卖」或「扣了库存但订单没变成已支付」的脏数据。
 async function mockPay(event) {
+  if (!MOCK_PAY_ENABLED) {
+    return { ok: false, code: 'MOCK_PAY_DISABLED', message: '演示支付已关闭，等待接入微信支付' }
+  }
   const { orderId } = event
   const oid = openid()
+  if (!orderId) return { ok: false, code: 'BAD_ORDER' }
 
-  // CAS：只有 pending_pay -> paid 的第一次调用成功，保证幂等
+  const cur = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  if (!cur || !cur.data) return { ok: false, code: 'NOT_FOUND' }
+  if (cur.data.buyer !== oid) return { ok: false, code: 'FORBIDDEN' }
+  if (cur.data.status !== 'pending_pay') {
+    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: cur.data.status }
+  }
+
+  // 1) 原子占库存：where 里带 stock > 0，并发下只有一个请求能扣成功，杜绝超卖
+  const stockRes = await db.collection(C.STORE)
+    .where({ _id: cur.data.storeId, stock: _.gt(0) })
+    .update({ data: { stock: _.inc(-1) } })
+    .catch(() => ({ stats: { updated: 0 } }))
+  if (!stockRes.stats || stockRes.stats.updated === 0) {
+    return { ok: false, code: 'OUT_OF_STOCK', message: '该门店已售罄，请换一家门店下单' }
+  }
+
+  // 2) CAS：只有 pending_pay -> paid 的第一次调用成功，保证幂等
   const payRes = await db.collection(C.ORDER).where({ _id: orderId, buyer: oid, status: 'pending_pay' }).update({
     data: { status: 'paid', paidAt: now() }
   })
-  if (payRes.stats.updated === 0) {
-    const cur = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
-    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: cur && cur.data ? cur.data.status : null }
+  if (!payRes.stats || payRes.stats.updated === 0) {
+    // 并发下已被别的请求处理：把刚占用的库存还回去，避免凭空少一件
+    await db.collection(C.STORE).doc(cur.data.storeId).update({ data: { stock: _.inc(1) } }).catch(() => {})
+    const latest = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: latest && latest.data ? latest.data.status : null }
   }
 
   const order = (await db.collection(C.ORDER).doc(orderId).get()).data
 
-  // 1) 为原订单生成邀请记录（邀请码 + 带参链接）
+  // 3) 为原订单生成邀请记录（邀请码 + 带参链接）。
+  //    达标人数与邀请截止在此时刻快照，后续运营改配置不影响已下单的用户。
   const code = genInviteCode()
   const invitationId = 'INV_' + orderId
   await db.collection(C.INVITATION).add({
@@ -735,17 +827,17 @@ async function mockPay(event) {
       orderId,
       buyer: oid,
       activityId: order.activityId,
-      status: 'accumulating',   // accumulating -> locked
+      status: 'accumulating',   // accumulating -> locked / void
       validCount: 0,
       target: null,
+      // 规则快照：优先使用下单时写入订单的值
+      targetSnapshot: order.inviteTargetSnapshot || null,
+      deadlineSnapshot: order.inviteDeadlineSnapshot || null,
       createdAt: now()
     }
   })
 
-  // 2) 扣减门店库存（支付成功才扣）
-  await db.collection(C.STORE).doc(order.storeId).update({ data: { stock: _.inc(-1) } })
-
-  // 3) 若该单有归因，记录有效邀请关系（按受邀账号去重）
+  // 4) 若该单有归因，记录有效邀请关系（按受邀账号去重）
   if (order.inviterInvitationId) {
     await addInviteRecord(order.inviterInvitationId, oid, orderId)
   }
@@ -763,6 +855,12 @@ function genInviteCode() {
 
 // 统计并重算邀请达标 -> 在事务内锁定资格并创建佣金单
 async function addInviteRecord(invitationId, invitee, orderId) {
+  // 邀请已作废后不再接受新的受邀记录，避免被取消订单的用户继续积累收益
+  const invDoc = await db.collection(C.INVITATION).doc(invitationId).get().catch(() => null)
+  const inv = invDoc && invDoc.data
+  if (!inv) return { ok: false, code: 'INVITATION_NOT_FOUND' }
+  if (inv.status === 'void') return { ok: false, code: 'INVITATION_VOID' }
+
   // 确定性 _id 保证同一邀请人下同一受邀账号只记一次
   const recId = 'IR_' + invitationId + '_' + invitee
   try {
@@ -776,33 +874,92 @@ async function addInviteRecord(invitationId, invitee, orderId) {
   return { dedup: false }
 }
 
+// 重算邀请进度。允许 accumulating 与 locked 两种状态进入：
+// - accumulating 且满足条件 → 锁定并生成佣金单
+// - locked 但有效人数回落（受邀人取消）或原订单失效 → 未出款则回退作废，已出款只标记差额
+// 达标人数优先取「下单时快照」，运营后改活动配置不会影响已存在的订单。
+async function targetOf(inv, order, act) {
+  return Number(
+    inv.targetSnapshot ||
+    (order && order.inviteTargetSnapshot) ||
+    (act && act.inviteTarget) ||
+    3
+  )
+}
+
 async function recomputeInvitation(invitationId) {
-  const inv = (await db.collection(C.INVITATION).doc(invitationId).get()).data
-  if (!inv || inv.status !== 'accumulating') return
+  const invDoc = await db.collection(C.INVITATION).doc(invitationId).get().catch(() => null)
+  const inv = invDoc && invDoc.data
+  if (!inv) return
+  if (inv.status !== 'accumulating' && inv.status !== 'locked') return
+
+  const orderDoc = await db.collection(C.ORDER).doc(inv.orderId).get().catch(() => null)
+  const originalOrder = orderDoc && orderDoc.data
+  if (!originalOrder) return
+  // 原订单只有「已支付 / 已核销」才算有效来源；待支付或已取消的订单不再产生佣金
+  const orderAlive = ['paid', 'verified'].includes(originalOrder.status)
+
+  const actDoc = await db.collection(C.ACTIVITY).doc(inv.activityId).get().catch(() => null)
+  const act = (actDoc && actDoc.data) || {}
+  const target = await targetOf(inv, originalOrder, act)
 
   const valid = await db.collection(C.INVITE_RECORD).where({ invitationId, status: 'valid' }).count()
-  // 同步有效人数
-  await db.collection(C.INVITATION).doc(invitationId).update({ data: { validCount: valid.total, target: null } })
+  await db.collection(C.INVITATION).doc(invitationId).update({ data: { validCount: valid.total } }).catch(() => {})
 
-  const act = (await db.collection(C.ACTIVITY).doc(inv.activityId).get()).data
-  if (valid.total < act.inviteTarget) return
+  // 已锁定：判断是否需要回退（这是「取消订单后重复退款」的关键拦截点）
+  if (inv.status === 'locked') {
+    if (orderAlive && valid.total >= target) return
+    const cm = await db.collection(C.COMMISSION).where({ invitationId }).get().catch(() => ({ data: [] }))
+    const commission = cm.data[0]
+    if (commission && commission.status === 'paid') {
+      // 钱已到用户账上，无法自动追回：保留锁定，标记差额供运营人工处理
+      await db.collection(C.INVITATION).doc(invitationId).update({
+        data: { shortfall: true, shortfallAt: now(), shortfallCount: valid.total }
+      }).catch(() => {})
+      await log('invitation_shortfall', {
+        invitationId, validCount: valid.total, target,
+        reason: orderAlive ? 'invitee_cancelled' : 'order_cancelled'
+      })
+    } else {
+      // 尚未出款：回退到累计中，作废在途佣金与资金占用
+      await db.collection(C.INVITATION).doc(invitationId).update({
+        data: { status: 'accumulating', target: null, revertedAt: now(), shortfall: false }
+      }).catch(() => {})
+      if (commission) {
+        await db.collection(C.COMMISSION).doc(commission._id)
+          .update({ data: { status: 'void', voidAt: now(), voidReason: orderAlive ? 'invitee_cancelled' : 'order_cancelled' } })
+          .catch(() => {})
+      }
+      await db.collection(C.LEDGER).doc('LG_COMM_' + inv.orderId)
+        .update({ data: { status: 'void', voidAt: now() } })
+        .catch(() => {})
+      await log('commission_void', { invitationId, orderId: inv.orderId })
+    }
+    return
+  }
+
+  // 累计中：原订单失效或人数不足，直接结束
+  if (!orderAlive) return
+  if (valid.total < target) return
 
   // 事务内：二次校验 + CAS 锁定，避免并发重复发佣
   try {
     await db.runTransaction(async tx => {
       const fresh = (await tx.collection(C.INVITATION).doc(invitationId).get()).data
       if (!fresh || fresh.status !== 'accumulating') return
+      const freshOrder = (await tx.collection(C.ORDER).doc(fresh.orderId).get()).data
+      if (!freshOrder || !['paid', 'verified'].includes(freshOrder.status)) return
       const cnt = await tx.collection(C.INVITE_RECORD).where({ invitationId, status: 'valid' }).count()
-      if (cnt.total < act.inviteTarget) return
+      if (cnt.total < target) return
 
       // 锁定资格
       await tx.collection(C.INVITATION).doc(invitationId).update({
-        data: { status: 'locked', validCount: cnt.total, target: act.inviteTarget, lockedAt: now() }
+        data: { status: 'locked', validCount: cnt.total, target, lockedAt: now(), shortfall: false }
       })
 
       // 唯一佣金单：_id 绑定原订单，保证每单一次
-      const originalOrder = (await tx.collection(C.ORDER).doc(fresh.orderId).get()).data
       const commissionId = 'CM_' + fresh.orderId
+      const amount = Number(freshOrder.priceFenSnapshot || freshOrder.amountFen || 0)
       const exist = await tx.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
       if (!exist || !exist.data) {
         await tx.collection(C.COMMISSION).add({
@@ -811,75 +968,192 @@ async function recomputeInvitation(invitationId) {
             orderId: fresh.orderId,
             invitationId,
             buyer: fresh.buyer,
-            amountFen: originalOrder.amountFen,
-            status: 'pending',        // pending -> processing -> paid / exception
+            amountFen: amount,
+            status: 'pending',        // pending -> processing -> paid / exception / void
             refundNo: 'RF' + fresh.orderId, // 固定商户退款单号，重试沿用
             channelStatus: null,
             createdAt: now()
           }
         })
         // 资金占用：在途金额
-        await tx.collection(C.LEDGER).add({
-          data: {
-            _id: 'LG_COMM_' + fresh.orderId,
-            orderId: fresh.orderId,
-            type: 'commission',
-            amountFen: originalOrder.amountFen,
-            status: 'in_flight',
-            refundNo: 'RF' + fresh.orderId,
-            createdAt: now()
-          }
-        })
+        const led = await tx.collection(C.LEDGER).doc('LG_COMM_' + fresh.orderId).get().catch(() => null)
+        if (!led || !led.data) {
+          await tx.collection(C.LEDGER).add({
+            data: {
+              _id: 'LG_COMM_' + fresh.orderId,
+              orderId: fresh.orderId,
+              type: 'commission',
+              amountFen: amount,
+              status: 'in_flight',
+              refundNo: 'RF' + fresh.orderId,
+              createdAt: now()
+            }
+          })
+        }
       }
     })
     await log('commission_locked', { invitationId, orderId: inv.orderId })
   } catch (e) {
-    // 事务冲突：重试一次（回调场景可再入）
+    // 事务冲突：降级重试一次（回调场景可再入）
     await recomputeInvitationOnce(invitationId)
   }
 }
 
 async function recomputeInvitationOnce(invitationId) {
-  const inv = (await db.collection(C.INVITATION).doc(invitationId).get()).data
+  const invDoc = await db.collection(C.INVITATION).doc(invitationId).get().catch(() => null)
+  const inv = invDoc && invDoc.data
   if (!inv || inv.status !== 'accumulating') return
-  const act = (await db.collection(C.ACTIVITY).doc(inv.activityId).get()).data
+  const orderDoc = await db.collection(C.ORDER).doc(inv.orderId).get().catch(() => null)
+  const order = orderDoc && orderDoc.data
+  if (!order || !['paid', 'verified'].includes(order.status)) return
+  const actDoc = await db.collection(C.ACTIVITY).doc(inv.activityId).get().catch(() => null)
+  const act = (actDoc && actDoc.data) || {}
+  const target = await targetOf(inv, order, act)
   const cnt = await db.collection(C.INVITE_RECORD).where({ invitationId, status: 'valid' }).count()
-  if (cnt.total < act.inviteTarget) return
+  if (cnt.total < target) return
   const updated = await db.collection(C.INVITATION).where({ _id: invitationId, status: 'accumulating' }).update({
-    data: { status: 'locked', validCount: cnt.total, target: act.inviteTarget, lockedAt: now() }
+    data: { status: 'locked', validCount: cnt.total, target, lockedAt: now() }
   })
-  if (updated.stats.updated === 1) {
-    const order = (await db.collection(C.ORDER).doc(inv.orderId).get()).data
-    await db.collection(C.COMMISSION).add({
-      data: {
-        _id: 'CM_' + inv.orderId, orderId: inv.orderId, invitationId,
-        buyer: inv.buyer, amountFen: order.amountFen, status: 'pending',
-        refundNo: 'RF' + inv.orderId, channelStatus: null, createdAt: now()
-      }
-    }).catch(() => {})
-  }
+  if (!updated.stats || updated.stats.updated !== 1) return
+  const amount = Number(order.priceFenSnapshot || order.amountFen || 0)
+  // 与事务路径保持一致：佣金单与资金占用必须同时落库，否则退款时找不到流水
+  await db.collection(C.COMMISSION).add({
+    data: {
+      _id: 'CM_' + inv.orderId, orderId: inv.orderId, invitationId,
+      buyer: inv.buyer, amountFen: amount, status: 'pending',
+      refundNo: 'RF' + inv.orderId, channelStatus: null, createdAt: now()
+    }
+  }).catch(() => {})
+  await db.collection(C.LEDGER).add({
+    data: {
+      _id: 'LG_COMM_' + inv.orderId, orderId: inv.orderId, type: 'commission',
+      amountFen: amount, status: 'in_flight', refundNo: 'RF' + inv.orderId, createdAt: now()
+    }
+  }).catch(() => {})
 }
 
 // ---------- 退款渠道结果（mock，替换点 2）----------
 async function mockRefund(event) {
-  const { commissionId, result } = event // result: 'success' | 'fail'
-  const cm = (await db.collection(C.COMMISSION).doc(commissionId).get()).data
-  if (!cm) return { ok: false, code: 'NOT_FOUND' }
-  if (cm.status === 'paid') return { ok: true, already: true } // 幂等
-
-  const success = result !== 'fail'
-  await db.collection(C.COMMISSION).doc(commissionId).update({
-    data: {
-      status: success ? 'paid' : 'exception',
-      channelStatus: success ? 'REFUND_SUCCESS' : 'REFUND_FAIL',
-      paidAt: success ? now() : null
+  if (!MOCK_PAY_ENABLED) {
+    return {
+      ok: false, code: 'MOCK_PAY_DISABLED',
+      message: '演示退款已关闭，请在运营端「退款处理」标记线下退款'
     }
-  })
-  await db.collection(C.LEDGER).doc('LG_COMM_' + cm.orderId).update({
-    data: { status: success ? 'paid_out' : 'exception', channelStatus: success ? 'REFUND_SUCCESS' : 'REFUND_FAIL' }
-  })
+  }
+  const { commissionId, result } = event // result: 'success' | 'fail'
+  if (!commissionId) return { ok: false, code: 'BAD_COMMISSION' }
+  const success = result !== 'fail'
+
+  // 条件更新：只有仍在途/异常的佣金能被改写，并发重复回调只有一个能成功，杜绝重复出款
+  const r = await db.collection(C.COMMISSION)
+    .where({ _id: commissionId, status: _.in(['pending', 'processing', 'exception']) })
+    .update({
+      data: {
+        status: success ? 'paid' : 'exception',
+        channelStatus: success ? 'REFUND_SUCCESS' : 'REFUND_FAIL',
+        paidAt: success ? now() : null
+      }
+    })
+    .catch(() => ({ stats: { updated: 0 } }))
+  if (!r.stats || r.stats.updated === 0) {
+    const cur = await db.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
+    if (!cur || !cur.data) return { ok: false, code: 'NOT_FOUND' }
+    if (cur.data.status === 'paid') return { ok: true, already: true, status: 'paid' } // 幂等
+    if (cur.data.status === 'void') {
+      return { ok: false, code: 'COMMISSION_VOID', message: '该佣金已作废（订单已取消）' }
+    }
+    return { ok: false, code: 'CONFLICT', status: cur.data.status }
+  }
+
+  const cm = (await db.collection(C.COMMISSION).doc(commissionId).get()).data
+  await settleLedger(cm.orderId, success ? 'paid_out' : 'exception', success ? 'REFUND_SUCCESS' : 'REFUND_FAIL')
   await log('mockRefund', { commissionId, result })
   return { ok: true, status: success ? 'paid' : 'exception' }
+}
+
+// 资金流水结算：以 LG_COMM_<orderId> 为确定性 _id，缺失时补建，保证「有佣金必有流水」
+async function settleLedger(orderId, status, channelStatus) {
+  const id = 'LG_COMM_' + orderId
+  const doc = await db.collection(C.LEDGER).doc(id).get().catch(() => null)
+  if (doc && doc.data) {
+    await db.collection(C.LEDGER).doc(id).update({ data: { status, channelStatus } }).catch(() => {})
+    return
+  }
+  const cm = await db.collection(C.COMMISSION).where({ orderId }).limit(1).get().catch(() => ({ data: [] }))
+  await db.collection(C.LEDGER).add({
+    data: {
+      _id: id, orderId, type: 'commission',
+      amountFen: cm.data[0] ? cm.data[0].amountFen : 0,
+      status, channelStatus, createdAt: now()
+    }
+  }).catch(() => {})
+}
+
+// ---------- 运营端退款处理 ----------
+// 不调用支付渠道，只解决「谁该退、退没退」：未接入真实退款时，运营在此核对并标记线下退款。
+function shortId(id) {
+  const s = String(id || '')
+  if (s.length <= 10) return s
+  return s.slice(0, 4) + '****' + s.slice(-4)
+}
+
+async function adminCommissions(event) {
+  const status = String(event.status || 'open')
+  const limit = Math.min(Math.max(Number(event.limit) || 50, 1), 100)
+  let q = db.collection(C.COMMISSION)
+  if (status === 'open') q = q.where({ status: _.in(['pending', 'processing', 'exception']) })
+  else if (status !== 'all') q = q.where({ status })
+  const list = await q.orderBy('createdAt', 'desc').limit(limit).get().catch(() => ({ data: [] }))
+
+  const rows = []
+  for (const c of list.data) {
+    const od = await db.collection(C.ORDER).doc(c.orderId).get().catch(() => null)
+    const o = od && od.data
+    rows.push({
+      commissionId: c._id,
+      orderId: c.orderId,
+      orderNo: (o && o.orderNo) || '',
+      buyerShort: shortId(c.buyer),
+      amountFen: c.amountFen,
+      status: c.status,
+      refundNo: c.refundNo || '',
+      channelStatus: c.channelStatus || '',
+      storeName: (o && o.storeName) || '',
+      createdAt: c.createdAt,
+      paidAt: c.paidAt || null,
+      voidReason: c.voidReason || ''
+    })
+  }
+  const totalAmountFen = rows.filter(r => r.status !== 'void').reduce((s, r) => s + (r.amountFen || 0), 0)
+  return { ok: true, commissions: rows, totalAmountFen, status }
+}
+
+// 标记线下已退款（转账/现金/其他渠道）。仍走条件更新，避免与渠道回调互相覆盖。
+async function adminMarkRefund(event) {
+  const commissionId = String(event.commissionId || '')
+  if (!commissionId) return { ok: false, code: 'BAD_COMMISSION' }
+  const note = String(event.note || '').slice(0, 100)
+
+  const r = await db.collection(C.COMMISSION)
+    .where({ _id: commissionId, status: _.in(['pending', 'processing', 'exception']) })
+    .update({
+      data: {
+        status: 'paid', channelStatus: 'OFFLINE_TRANSFER',
+        paidAt: now(), paidBy: openid(), note
+      }
+    })
+    .catch(() => ({ stats: { updated: 0 } }))
+  if (!r.stats || r.stats.updated === 0) {
+    const cur = await db.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
+    if (!cur || !cur.data) return { ok: false, code: 'NOT_FOUND' }
+    if (cur.data.status === 'paid') return { ok: true, already: true }
+    if (cur.data.status === 'void') return { ok: false, code: 'COMMISSION_VOID', message: '该佣金已作废（订单已取消）' }
+    return { ok: false, code: 'CONFLICT', status: cur.data.status }
+  }
+  const cm = (await db.collection(C.COMMISSION).doc(commissionId).get()).data
+  await settleLedger(cm.orderId, 'paid_out', 'OFFLINE_TRANSFER')
+  await log('adminMarkRefund', { commissionId, note })
+  return { ok: true }
 }
 
 // ---------- 查询 ----------
@@ -888,26 +1162,40 @@ async function getInvitation(event) {
   const inv = await db.collection(C.INVITATION).where(key).get()
   if (inv.data.length === 0) return { ok: false, code: 'NOT_FOUND' }
   const i = inv.data[0]
-  const act = (await db.collection(C.ACTIVITY).doc(i.activityId).get()).data
-  const cm = await db.collection(C.COMMISSION).where({ invitationId: i._id }).get()
+  const orderDoc = await db.collection(C.ORDER).doc(i.orderId).get().catch(() => null)
+  const order = orderDoc && orderDoc.data
+  const actDoc = await db.collection(C.ACTIVITY).doc(i.activityId).get().catch(() => null)
+  const act = (actDoc && actDoc.data) || {}
+  const cm = await db.collection(C.COMMISSION).where({ invitationId: i._id }).get().catch(() => ({ data: [] }))
+  const c = cm.data[0]
   return {
     ok: true,
     invitation: {
       code: i.code,
       validCount: i.validCount,
-      target: i.target || act.inviteTarget,
+      // 达标人数优先取快照：运营后改配置不影响已下单用户
+      target: i.target || i.targetSnapshot || (order && order.inviteTargetSnapshot) || act.inviteTarget || 3,
       status: i.status,
-      inviteDeadline: act.inviteDeadline,
-      amountFen: act.priceFen
+      shortfall: !!i.shortfall,
+      // 邀请截止同样以快照为准
+      inviteDeadline: i.deadlineSnapshot || act.inviteDeadline,
+      amountFen: (order && (order.priceFenSnapshot || order.amountFen)) || act.priceFen
     },
-    commission: cm.data.length ? cm.data[0] : null
+    // 脱敏：不返回 buyer openid、商户退款单号等内部字段
+    commission: c ? {
+      _id: c._id,
+      status: c.status,
+      amountFen: c.amountFen,
+      paidAt: c.paidAt || null
+    } : null
   }
 }
 
-async function getMyOrders() {
-  const list = await db.collection(C.ORDER).where({ buyer: openid() }).orderBy('createdAt', 'desc').get()
+async function getMyOrders(event = {}) {
+  const limit = Math.min(Math.max(Number(event.limit) || 50, 1), 100)
+  const list = await db.collection(C.ORDER).where({ buyer: openid() }).orderBy('createdAt', 'desc').limit(limit).get()
   const invMap = {}
-  const invs = await db.collection(C.INVITATION).where({ buyer: openid() }).get()
+  const invs = await db.collection(C.INVITATION).where({ buyer: openid() }).limit(limit).get()
   invs.data.forEach(i => { invMap[i.orderId] = i })
   return {
     ok: true,
@@ -915,7 +1203,8 @@ async function getMyOrders() {
       ...o,
       inviteCode: invMap[o._id] ? invMap[o._id].code : null,
       invitationId: invMap[o._id] ? invMap[o._id]._id : null
-    }))
+    })),
+    limit
   }
 }
 
@@ -924,11 +1213,15 @@ async function getOrderDetail(event) {
   if (!o || o.buyer !== openid()) return { ok: false, code: 'FORBIDDEN' }
   const inv = await db.collection(C.INVITATION).where({ orderId: event.orderId }).get()
   const cm = await db.collection(C.COMMISSION).where({ orderId: event.orderId }).get()
+  const c = cm.data[0]
   return {
     ok: true,
     order: o,
     invitation: inv.data.length ? inv.data[0] : null,
-    commission: cm.data.length ? cm.data[0] : null
+    // 与邀请页保持一致：只给展示所需字段
+    commission: c ? {
+      _id: c._id, status: c.status, amountFen: c.amountFen, paidAt: c.paidAt || null
+    } : null
   }
 }
 
@@ -959,13 +1252,17 @@ async function isStaff() {
   return null
 }
 
-async function staffOrders() {
+async function staffOrders(event = {}) {
   const staff = await isStaff()
   if (!staff) return { ok: false, code: 'NOT_STAFF' }
+  const ids = staff.storeIds || []
+  // 没有绑定门店时不构造 in([])，那会得到一个非法查询
+  if (!ids.length) return { ok: true, orders: [], storeIds: [], limit: 0 }
+  const limit = Math.min(Math.max(Number(event.limit) || 100, 1), 100)
   const list = await db.collection(C.ORDER).where({
-    storeId: _.in(staff.storeIds), status: _.in(['paid', 'verified', 'cancel_processing', 'cancelled'])
-  }).orderBy('createdAt', 'desc').get()
-  return { ok: true, orders: list.data, storeIds: staff.storeIds }
+    storeId: _.in(ids), status: _.in(['paid', 'verified', 'cancel_processing', 'cancelled'])
+  }).orderBy('createdAt', 'desc').limit(limit).get()
+  return { ok: true, orders: list.data, storeIds: ids, limit }
 }
 
 async function staffVerify(event) {
@@ -992,28 +1289,54 @@ async function staffCancel(event) {
   const staff = await isStaff()
   if (!staff) return { ok: false, code: 'NOT_STAFF' }
   const { orderId } = event
-  const o = (await db.collection(C.ORDER).doc(orderId).get()).data
+  const od = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  const o = od && od.data
   if (!o) return { ok: false, code: 'NOT_FOUND' }
   if (!staff.storeIds.includes(o.storeId)) return { ok: false, code: 'WRONG_STORE' }
   if (o.status !== 'paid') return { ok: false, code: 'CANCEL_NOT_ALLOWED' }
 
-  // 查询该单佣金状态，决定可退金额
-  const cm = await db.collection(C.COMMISSION).where({ orderId }).get()
+  // 查询该单佣金状态，决定可退金额（已作为佣金退出去的部分不再重复退）
+  const cm = await db.collection(C.COMMISSION).where({ orderId }).get().catch(() => ({ data: [] }))
   const commission = cm.data.length ? cm.data[0] : null
   const paidOut = commission && commission.status === 'paid' ? commission.amountFen : 0
   const inFlight = commission && ['pending', 'processing'].includes(commission.status) ? commission.amountFen : 0
-  const refundable = o.amountFen - paidOut - inFlight
+  const refundable = Math.max(0, (o.amountFen || 0) - paidOut - inFlight)
 
   const r = await db.collection(C.ORDER).where({ _id: orderId, status: 'paid' }).update({
     data: { status: 'cancel_processing', cancelRefundableFen: refundable, cancelAt: now() }
   })
-  if (r.stats.updated === 0) return { ok: false, code: 'CONFLICT' }
+  if (!r.stats || r.stats.updated === 0) return { ok: false, code: 'CONFLICT' }
 
-  // 暂扣该受邀订单对邀请人的计数（如它是有效受邀）
+  // 1) 本单作为「邀请人」的资格作废：订单都不存在了，不能再靠它拿退款。
+  //    否则会形成「取消退款 129 + 后续凑满 N 人再退 129」的重复出款，这是原先最严重的资金漏洞。
+  const ownInv = await db.collection(C.INVITATION).where({ orderId }).get().catch(() => ({ data: [] }))
+  for (const inv of ownInv.data) {
+    if (inv.status === 'void') continue
+    await db.collection(C.INVITATION).doc(inv._id)
+      .update({ data: { status: 'void', voidAt: now(), voidReason: 'order_cancelled' } })
+      .catch(() => {})
+    // 该邀请下的受邀关系一并作废，停止累计
+    await db.collection(C.INVITE_RECORD).where({ invitationId: inv._id })
+      .update({ data: { status: 'void' } }).catch(() => {})
+    // 已锁定但尚未出款的佣金作废；已出款的只记录，供运营人工核对（钱已到用户账上，无法自动追回）
+    const ownCm = await db.collection(C.COMMISSION).where({ invitationId: inv._id }).get().catch(() => ({ data: [] }))
+    const c = ownCm.data[0]
+    if (c && c.status !== 'paid') {
+      await db.collection(C.COMMISSION).doc(c._id)
+        .update({ data: { status: 'void', voidAt: now(), voidReason: 'order_cancelled' } }).catch(() => {})
+      await db.collection(C.LEDGER).doc('LG_COMM_' + orderId)
+        .update({ data: { status: 'void', voidAt: now() } }).catch(() => {})
+    } else if (c && c.status === 'paid') {
+      await log('cancel_after_refund', { orderId, commissionId: c._id, amountFen: c.amountFen })
+    }
+  }
+
+  // 2) 本单作为「受邀人」：撤掉对邀请人的计数，并触发重算（未出款则回退作废）
   if (o.inviterInvitationId) {
     await db.collection(C.INVITE_RECORD).where({
       invitationId: o.inviterInvitationId, invitee: o.buyer
-    }).update({ data: { status: 'held' } })
+    }).update({ data: { status: 'held' } }).catch(() => {})
+    await recomputeInvitation(o.inviterInvitationId)
   }
 
   // 预览：直接确认取消成功，写流水
@@ -1023,42 +1346,63 @@ async function staffCancel(event) {
 }
 
 async function confirmCancel(orderId) {
-  const o = (await db.collection(C.ORDER).doc(orderId).get()).data
-  await db.collection(C.ORDER).doc(orderId).update({ data: { status: 'cancelled', cancelledAt: now() } })
-  await db.collection(C.STORE).doc(o.storeId).update({ data: { stock: _.inc(1) } })
-  await db.collection(C.LEDGER).add({
-    data: {
-      _id: 'LG_CANCEL_' + orderId, orderId, type: 'store_cancel',
-      amountFen: o.cancelRefundableFen || 0, status: 'paid_out', createdAt: now()
-    }
-  })
+  const od = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  const o = od && od.data
+  if (!o) return
+  // CAS：只有 cancel_processing -> cancelled 的第一次成功，避免重复回补库存
+  const r = await db.collection(C.ORDER).where({ _id: orderId, status: 'cancel_processing' }).update({
+    data: { status: 'cancelled', cancelledAt: now() }
+  }).catch(() => ({ stats: { updated: 0 } }))
+  if (!r.stats || r.stats.updated === 0) return
+  await db.collection(C.STORE).doc(o.storeId).update({ data: { stock: _.inc(1) } }).catch(() => {})
+  const ledId = 'LG_CANCEL_' + orderId
+  const led = await db.collection(C.LEDGER).doc(ledId).get().catch(() => null)
+  if (!led || !led.data) {
+    await db.collection(C.LEDGER).add({
+      data: {
+        _id: ledId, orderId, type: 'store_cancel',
+        amountFen: o.cancelRefundableFen || 0, status: 'paid_out', createdAt: now()
+      }
+    }).catch(() => {})
+  }
 }
 
 // ---------- 运营 / 财务 ----------
+// 统计一律走 count() 聚合：原实现用 get() 全表拉取，云开发单次最多返回 100 条，
+// 订单量一上来看板数字就会默默失真。
 async function dashboard() {
-  const act = (await db.collection(C.ACTIVITY).doc('act_linyou_v1').get()).data
-  const orders = await db.collection(C.ORDER).get()
-  const invs = await db.collection(C.INVITATION).get()
-  const cms = await db.collection(C.COMMISSION).get()
-  const paid = orders.data.filter(o => ['paid', 'verified'].includes(o.status))
-  const verified = orders.data.filter(o => o.status === 'verified')
-  const locked = invs.data.filter(i => i.status === 'locked')
+  const actDoc = await db.collection(C.ACTIVITY).doc('act_linyou_v1').get().catch(() => null)
+  const act = (actDoc && actDoc.data) || {}
+  const [paidCnt, verifiedCnt, lockedCnt, cmPaidCnt, cmOpenCnt, cmVoidCnt] = await Promise.all([
+    db.collection(C.ORDER).where({ status: _.in(['paid', 'verified']) }).count().catch(() => ({ total: 0 })),
+    db.collection(C.ORDER).where({ status: 'verified' }).count().catch(() => ({ total: 0 })),
+    db.collection(C.INVITATION).where({ status: 'locked' }).count().catch(() => ({ total: 0 })),
+    db.collection(C.COMMISSION).where({ status: 'paid' }).count().catch(() => ({ total: 0 })),
+    db.collection(C.COMMISSION).where({ status: _.in(['pending', 'processing', 'exception']) }).count().catch(() => ({ total: 0 })),
+    db.collection(C.COMMISSION).where({ status: 'void' }).count().catch(() => ({ total: 0 }))
+  ])
+  const paidTotal = paidCnt.total || 0
+  const lockedTotal = lockedCnt.total || 0
   return {
     ok: true,
     stats: {
-      paidOrderCount: paid.length,
-      inviteTarget: act.inviteTarget,
-      lockedCount: locked.length,
-      achievedRate: paid.length ? Math.round(locked.length / paid.length * 100) : 0,
-      commissionPaid: cms.data.filter(c => c.status === 'paid').length,
-      verifyRate: paid.length ? Math.round(verified.length / paid.length * 100) : 0
+      paidOrderCount: paidTotal,
+      inviteTarget: act.inviteTarget || 3,
+      lockedCount: lockedTotal,
+      // 口径统一：已支付订单中邀请已达标的比例（每单对应一个邀请，分子分母同源）
+      achievedRate: paidTotal ? Math.round(lockedTotal / paidTotal * 100) : 0,
+      commissionPaid: cmPaidCnt.total || 0,
+      commissionPending: cmOpenCnt.total || 0,
+      commissionVoid: cmVoidCnt.total || 0,
+      verifyRate: paidTotal ? Math.round((verifiedCnt.total || 0) / paidTotal * 100) : 0
     }
   }
 }
 
-async function ledger() {
-  const list = await db.collection(C.LEDGER).orderBy('createdAt', 'desc').get()
-  return { ok: true, ledger: list.data }
+async function ledger(event = {}) {
+  const limit = Math.min(Math.max(Number(event.limit) || 100, 1), 100)
+  const list = await db.collection(C.LEDGER).orderBy('createdAt', 'desc').limit(limit).get()
+  return { ok: true, ledger: list.data, limit }
 }
 
 // ---------- 端到端自检 ----------
@@ -1070,6 +1414,8 @@ const testStores = [
 ]
 
 async function cleanupE2E() {
+  // 双保险：即使被内部调用，也不允许在未开启自检时清库
+  if (!ALLOW_SELF_TEST) throw new Error('SELF_TEST_DISABLED')
   const colls = [C.ORDER, C.INVITATION, C.INVITE_RECORD, C.COMMISSION, C.LEDGER, C.STAFF, C.OPLOG]
   for (const c of colls) {
     try { await db.collection(c).where({ _id: _.exists(true) }).remove() } catch (e) { /* 忽略空集合 */ }
@@ -1077,6 +1423,12 @@ async function cleanupE2E() {
 }
 
 async function e2eTest() {
+  if (!ALLOW_SELF_TEST) {
+    return {
+      ok: false, code: 'SELF_TEST_DISABLED',
+      message: '自检接口已禁用：它会清空订单/佣金/流水等业务数据。确需运行请先在云函数环境变量设置 ALLOW_SELF_TEST=true，跑完立即移除。'
+    }
+  }
   const steps = []
   let allOk = true
   const run = async (name, fn) => {
@@ -1152,6 +1504,12 @@ async function e2eTest() {
 
 // 幂等/边界自检：重复回调、自邀、错门店、重复受邀去重、重复退款
 async function edgeTest() {
+  if (!ALLOW_SELF_TEST) {
+    return {
+      ok: false, code: 'SELF_TEST_DISABLED',
+      message: '自检接口已禁用：它会清空订单/佣金/流水等业务数据。确需运行请先在云函数环境变量设置 ALLOW_SELF_TEST=true，跑完立即移除。'
+    }
+  }
   const steps = []
   let allOk = true
   const run = async (name, fn) => {
@@ -1252,7 +1610,7 @@ exports.main = async (event) => {
     'adminGetConfig', 'adminSaveActivity', 'adminSavePoster',
     'adminPosterInit', 'adminPosterChunk', 'adminPosterMerge', 'adminResetPoster',
     'adminSaveStore', 'adminDeleteStore',
-    'adminRevoke', 'adminListAdmins',
+    'adminRevoke', 'adminListAdmins', 'adminCommissions', 'adminMarkRefund',
     'staffOrders', 'staffVerify', 'staffCancel', 'mockRefund',
     'seed', 'dashboard', 'ledger', 'e2eTest', 'edgeTest'
   ]
@@ -1281,6 +1639,13 @@ exports.main = async (event) => {
       const denied = requireAdmin()
       if (denied) return denied
     }
+    // 自检接口：管理员之外还要满足环境开关，双重拦截避免线上误触清库
+    if ((action === 'e2eTest' || action === 'edgeTest') && !ALLOW_SELF_TEST) {
+      return {
+        ok: false, code: 'SELF_TEST_DISABLED',
+        message: '自检接口已禁用：它会清空订单/佣金/流水等业务数据。确需运行请先设置环境变量 ALLOW_SELF_TEST=true，跑完立即移除。'
+      }
+    }
     switch (action) {
       case 'login': return await login(e)
       case 'whoAmI': return await whoAmI()
@@ -1301,18 +1666,20 @@ exports.main = async (event) => {
       case 'adminGrant': return await adminGrant(e)
       case 'adminRevoke': return await adminRevoke(e)
       case 'adminListAdmins': return await adminListAdmins()
+      case 'adminCommissions': return await adminCommissions(e)
+      case 'adminMarkRefund': return await adminMarkRefund(e)
       case 'createOrder': return await createOrder(e)
       case 'mockPay': return await mockPay(e)
       case 'mockRefund': return await mockRefund(e)
       case 'getInvitation': return await getInvitation(e)
-      case 'getMyOrders': return await getMyOrders()
+      case 'getMyOrders': return await getMyOrders(e)
       case 'getOrderDetail': return await getOrderDetail(e)
       case 'genVerifyCode': return await genVerifyCode(e)
-      case 'staffOrders': return await staffOrders()
+      case 'staffOrders': return await staffOrders(e)
       case 'staffVerify': return await staffVerify(e)
       case 'staffCancel': return await staffCancel(e)
       case 'dashboard': return await dashboard()
-      case 'ledger': return await ledger()
+      case 'ledger': return await ledger(e)
       case 'e2eTest': return await e2eTest()
       case 'edgeTest': return await edgeTest()
       default: return { ok: false, code: 'UNKNOWN_ACTION' }

@@ -4,7 +4,8 @@ const tab = require('../../utils/tab')
 Page({
   data: {
     stats: null, ledger: [], loading: true, tab: 'overview',
-    identity: null, noAccess: false, admins: [], newAdmin: '', adminsLoaded: false
+    identity: null, noAccess: false, admins: [], newAdmin: '', adminsLoaded: false,
+    refunds: [], refundTotal: '0.00', refundsLoaded: false, refunding: false
   },
   async onShow() {
     tab.sync(this, tab.PATH.admin)
@@ -51,11 +52,52 @@ Page({
     }
     this.setData({ loading: false })
     if (this.data.tab === 'members') this.loadAdmins()
+    if (this.data.tab === 'refunds') this.loadRefunds()
   },
   switchTab(e) {
     const t = e.currentTarget.dataset.tab
     this.setData({ tab: t })
     if (t === 'members' && !this.data.adminsLoaded) this.loadAdmins()
+    if (t === 'refunds') this.loadRefunds()
+  },
+  // ---- 退款处理：列出待退款/异常佣金，标记线下已退款 ----
+  async loadRefunds() {
+    const r = await api.adminCommissions({ status: 'open' })
+    if (!r.ok) return
+    const statusText = {
+      pending: '待退款', processing: '退款中', exception: '退款异常'
+    }
+    this.setData({
+      refunds: (r.commissions || []).map(x => Object.assign({}, x, {
+        amountYuan: api.fen2yuan(x.amountFen),
+        statusText: statusText[x.status] || x.status,
+        timeText: api.fmtTime(x.createdAt)
+      })),
+      refundTotal: api.fen2yuan(r.totalAmountFen),
+      refundsLoaded: true
+    })
+  },
+  markRefund(e) {
+    const id = e.currentTarget.dataset.id
+    const amount = e.currentTarget.dataset.amount
+    if (!id || this.data.refunding) return
+    wx.showModal({
+      title: '标记已退款',
+      content: '确认已通过线下转账/现金等方式向用户退款 ¥' + amount + '？标记后该笔佣金状态变为「已到账」。',
+      success: async (r) => {
+        if (!r.confirm) return
+        this.setData({ refunding: true })
+        const res = await api.adminMarkRefund({ commissionId: id, note: '运营标记线下退款' })
+        this.setData({ refunding: false })
+        if (res.ok) {
+          wx.showToast({ title: '已标记', icon: 'success' })
+          this.loadRefunds()
+          this.load()
+        } else {
+          wx.showModal({ title: '操作失败', content: res.message || res.code || '未知错误', showCancel: false })
+        }
+      }
+    })
   },
   goConfig() { wx.navigateTo({ url: '/pages/config/config' }) },
   goHome() { wx.switchTab({ url: '/pages/index/index' }) },

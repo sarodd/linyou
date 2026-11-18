@@ -43,7 +43,9 @@ Page({
       const map = {
         ALREADY_ORDERED: '本活动你已有订单', OUT_OF_STOCK: '该门店已售罄',
         INVALID_INVITE_CODE: '邀请码无效', SELF_INVITE: '不能邀请自己',
-        ACTIVITY_ENDED: '活动已结束', ORDER_DEADLINE_PASSED: '已过下单截止时间'
+        ACTIVITY_ENDED: '活动已结束', ORDER_DEADLINE_PASSED: '已过下单截止时间',
+        INVITE_CLOSED: '该邀请已结束', INVITE_DEADLINE_PASSED: '该邀请已过截止时间',
+        NO_ACTIVITY: '活动还没有配置'
       }
       wx.showToast({ title: map[res.code] || '下单失败', icon: 'none' })
       return
@@ -53,7 +55,12 @@ Page({
     const pay = await api.mockPay({ orderId: res.order._id })
     wx.hideLoading()
     if (!pay.ok) {
-      wx.showToast({ title: '支付处理异常', icon: 'none' })
+      const payMap = {
+        OUT_OF_STOCK: '该门店刚售罄，请换一家门店重新下单',
+        MOCK_PAY_DISABLED: '演示支付已关闭，等待接入微信支付',
+        PAY_ALREADY_PROCESSED: '该订单已处理，请到订单页查看'
+      }
+      wx.showToast({ title: payMap[pay.code] || '支付处理异常', icon: 'none' })
       return
     }
     wx.redirectTo({ url: `/pages/invite/invite?id=${pay.invitationId}` })

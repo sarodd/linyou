@@ -33,7 +33,7 @@ miniprogram/
     invite/                  邀请码/链接、有效人数进度、佣金状态
     landing/                 受邀落地页（带参 code 进入）
     staff/                   店员工作台（管理员专属，核销、受理取消）
-    admin/                   管理员专属：运营看板 + 财务流水 + 身份卡片 + 成员管理
+    admin/                   管理员专属：运营看板 + 退款处理 + 资金流水 + 身份卡片 + 成员管理
     mine/                    我的：头像 / 昵称 / openid / 角色 / 订单统计（所有角色可见）
     config/                  管理员专属：活动配置页（活动/商品/门店/海报）
 ```
@@ -62,7 +62,7 @@ https://linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 
 真机使用地图选点前，需要在微信公众平台开通 `wx.chooseLocation` 并在用户隐私保护指引中声明位置用途。
 
-`e2eTest` 和 `edgeTest` 仅在隔离测试环境运行，它们会清空该环境的订单等业务集合。
+`e2eTest` 和 `edgeTest` **默认禁用**：它们会清空该环境的订单、邀请、佣金、资金流水、店员与操作日志。确需运行时，临时把云函数环境变量 `ALLOW_SELF_TEST` 设为 `true`，跑完立即移除。未开启时接口返回 `SELF_TEST_DISABLED`，不会执行任何删除。
 
 > 关于身份：已接入**真实微信登录**，详见下一章。未配置 AppSecret 或登录失败时自动回退固定预览身份 `preview`，预览功能不会中断。
 
@@ -99,6 +99,9 @@ AppSecret **绝不进前端代码、也不写进云函数源码**，只作为云
 | `WX_APPSECRET` | 小程序密钥（**仅云端**，`cloudbaserc.json` 不保存明文） |
 | `ADMIN_OPENIDS` | 可选，运营白名单，逗号分隔的 openid（形如 `wx_xxxx`） |
 | `ALLOW_TEST_IDENTITY` | 可选，设 `false` 关闭 `_testOpenid` 测试通道（上线建议关闭） |
+| `PREVIEW_ADMIN` | 可选，设 `true` 才允许固定演示身份具备管理员能力（默认关闭） |
+| `ALLOW_SELF_TEST` | 可选，设 `true` 才允许运行 `e2eTest`/`edgeTest`（默认关闭，会清库） |
+| `MOCK_PAY_ENABLED` | 可选，设 `false` 关闭演示支付与模拟退款（默认开启） |
 
 配置方式（二选一）：
 
@@ -147,7 +150,7 @@ AppSecret **绝不进前端代码、也不写进云函数源码**，只作为云
 
 - **公开**（无需登录）：`login` / `getActivity` / `getPosterRaw` / `getInvitation` / `whoAmI`
 - **需登录**：活动与订单类接口（`createOrder` / `mockPay` / `getMyOrders` / `getOrderDetail` / `genVerifyCode`）+ 个人资料（`getProfile` / `saveProfile`）
-- **仅管理员**：`admin*`、店员 `staffOrders/staffVerify/staffCancel`、`mockRefund`、`seed`、`dashboard`、`ledger`、`e2eTest`、`edgeTest`
+- **仅管理员**：`admin*`（含新增的 `adminCommissions` / `adminMarkRefund`）、店员 `staffOrders/staffVerify/staffCancel`、`mockRefund`、`seed`、`dashboard`、`ledger`、`e2eTest`、`edgeTest`
 
 普通用户调用管理员接口返回 `FORBIDDEN`；无身份返回 `NO_LOGIN`（前端自动清 token 重登一次）；越权查他人订单返回 `FORBIDDEN`（`buyer` 归属校验）。管理员在 `isStaff()` 里兜底获得全部门店权限；若该身份已绑定明确的 `staff` 记录，则优先按记录的 `storeIds` 限定（保证自检里的「错门店核销」断言有效）。
 
@@ -164,12 +167,15 @@ AppSecret **绝不进前端代码、也不写进云函数源码**，只作为云
 | 环境变量 | 默认 | 作用 |
 |---|---|---|
 | `ALLOW_TEST_IDENTITY` | `true` | 测试通道总开关。设 `false` 后 `_testOpenid` 完全失效，只能走真实微信登录 |
-| `PREVIEW_ADMIN` | `true` | 预览期把固定演示身份视为管理员，保证未配域名时演示功能不残 |
-| `PREVIEW_ADMIN_IDS` | `preview,staff` | 允许提权的固定演示身份白名单。**任意其他 `_testOpenid` 一律降为普通用户**，堵住「随便编个身份就是管理员」的提权口子 |
+| `PREVIEW_ADMIN` | **`false`** | 预览身份是否具备管理员能力。**默认关闭**：登录失败回退 `preview` 的用户只能浏览活动，拿不到运营权限 |
+| `PREVIEW_ADMIN_IDS` | `preview,staff` | 仅在 `PREVIEW_ADMIN=true` 时生效，指定可提权的固定演示身份。任意其他 `_testOpenid` 一律降为普通用户 |
 | `ADMIN_OPENIDS` | 空 | 环境变量管理员白名单 |
+| `ALLOW_SELF_TEST` | **`false`** | 自检接口开关。`e2eTest`/`edgeTest` 会清空业务集合，默认禁止 |
+| `MOCK_PAY_ENABLED` | `true` | 演示支付/退款开关。关闭后 `mockPay`/`mockRefund` 返回 `MOCK_PAY_DISABLED` |
 
-**预览期**（默认）：登录失败回退 `preview` 身份 → 仍是 admin → 四个 tab 全可用，不影响演示。
-**生产期**：设 `ALLOW_TEST_IDENTITY=false` + `PREVIEW_ADMIN=false` + 配好 `ADMIN_OPENIDS`（或用首位自举写入 `admins`）→ 只有真实微信身份且在白名单中的账号才是 admin，其余全部是 user。
+**默认状态（推荐）**：`PREVIEW_ADMIN` 与 `ALLOW_SELF_TEST` 都不设 → 只有 `admins` 集合里的真实微信账号是管理员，预览身份和测试身份都是普通用户；自检接口调不动。
+**纯演示环境**：设 `PREVIEW_ADMIN=true` 可让 `preview` 恢复管理员能力，但**不要在生产环境这样配**。
+**接真实支付后**：设 `MOCK_PAY_ENABLED=false`，同时 `ALLOW_SELF_TEST` 保持不设。
 
 ### 怎么验证登录生效
 
@@ -205,10 +211,11 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 ### 上线前安全清单
 
 - [ ] 设 `ALLOW_TEST_IDENTITY=false` 关闭测试通道（否则任何人可伪造 `_testOpenid` 冒充用户）
-- [ ] 设 `PREVIEW_ADMIN=false`，并确认 `PREVIEW_ADMIN_IDS` 不含可被猜到的值
+- [x] `PREVIEW_ADMIN` 默认已关闭，预览身份不再具备管理员能力
+- [x] `ALLOW_SELF_TEST` 默认已关闭，自检接口不会清库
 - [ ] 确定管理员来源：跑一次首位自举写入 `admins`，或配置 `ADMIN_OPENIDS` 环境变量白名单
 - [ ] 配置 request 合法域名（当前靠「不校验合法域名」预览）
-- [ ] 微信认证 + 商户号，把 `mockPay` / `mockRefund` 换成微信支付 v3
+- [ ] 微信认证 + 商户号，把 `mockPay` / `mockRefund` 换成微信支付 v3，并设 `MOCK_PAY_ENABLED=false`
 - [ ] AppSecret 定期轮换（重置后同步云端环境变量）
 - [ ] 复核自定义 tabBar 仅按 `whoAmI().role` 渲染；注意**前端隐藏入口不构成安全边界**，所有敏感接口必须保留在 `ADMIN_ACTIONS` 里
 
@@ -224,7 +231,7 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 
 **接口**（均在 `api` 云函数）：`adminGetConfig`、`adminSaveActivity`、`adminSavePoster`、`adminPosterInit/Chunk/Merge`、`adminResetPoster`、`adminSaveStore`、`adminDeleteStore`、`getPosterRaw`。金额由前端元转分，云函数做白名单字段校验 + 审计日志。
 
-> 鉴权：`admin*` / `seed` / `e2eTest` / `edgeTest` / `dashboard` / `ledger` 统一走 `requireAdmin()`。预览期 `ADMIN_OPENIDS` 留空即放行；配置白名单后仅白名单微信账号可操作，测试通道（`_testOpenid`）始终放行以便联调。
+> 鉴权：`admin*` / `seed` / `e2eTest` / `edgeTest` / `dashboard` / `ledger` 统一走 `requireAdmin()`。预览身份默认**不是**管理员（`PREVIEW_ADMIN` 默认关闭），只有 `admins` 集合与环境变量白名单中的真实微信账号可操作；自检类接口还需额外开启 `ALLOW_SELF_TEST`。
 
 ## 联调验证结果（2026-11-18）
 
@@ -238,9 +245,23 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 | 身份鉴权 | 无效 token → `NO_LOGIN`；公开接口不受影响 | ✅ 通过 |
 | 两档角色权限矩阵 | 18 项只读断言：user 仅活动/订单，admin 全部放行，越权 `FORBIDDEN` | ✅ 全部符合预期 |
 | 管理员管理链路 | 授予 → 生效（role=admin）→ 列表 → 移除 → 恢复自举状态 | ✅ 通过、无残留 |
-| 角色改造回归 | `e2eTest` 18/18、`edgeTest` 6/6，`WRONG_STORE` 断言正常 | ✅ 通过 |
+| 角色改造回归 | `e2eTest` 18/18、`edgeTest` 6/6，`WRONG_STORE` 断言正常 | ✅ 通过（历史结果，现需 `ALLOW_SELF_TEST=true` 才能重跑） |
 
 覆盖：下单→归因→3人达标锁定→佣金生成→退款到账→核销→门店取消→看板流水；支付回调重复、退款回调重复、重复受邀去重、错门店核销、无效邀请码均按预期拒绝。`_testOpenid`/`e2eTest`/`edgeTest` 仅供自动化联调，小程序正常调用不受影响。
+
+### 资金与权限加固（2026-11-19）
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| 自检接口 | 任何管理员可调，清空订单/佣金/流水/店员/日志 | 默认禁用，需 `ALLOW_SELF_TEST=true`；`cleanupE2E` 内部再拦一道 |
+| 取消订单后达标 | 取消已退款，后续凑满人数再退一次佣金（出款 258 收 129） | 取消即作废该单邀请与受邀记录；已锁定未出款则回退并作废佣金与流水 |
+| 库存扣减 | `inc(-1)` 无并发保护，可能扣成负数 | `where({_id, stock: gt(0)})` 原子扣减；订单 CAS 失败时回补库存 |
+| 达标条件 | 读活动当前 `inviteTarget`，运营改配置影响存量订单 | 订单/邀请存 `inviteTargetSnapshot`、`inviteDeadlineSnapshot`、`priceFenSnapshot`，判定优先取快照 |
+| 退款重复回调 | 先读后写，并发可能出款两次 | 条件更新 `status in (pending,processing,exception)`，只有一个能改 |
+| 退款入口 | 用户可在邀请页自己点「模拟退款成功」 | 已移除；改由运营端「退款处理」核对后标记，写流水 |
+| 预览身份 | 默认具备管理员能力（登录失败即变管理员） | `PREVIEW_ADMIN` 默认关闭，回退身份只能浏览 |
+| 统计口径 | 全表 `get()`，超过 100 条即失真 | 改用 `count()` 聚合；列表统一分页上限 |
+| 邀请详情 | 公开返回 `buyer` openid 与商户退款单号 | 仅返回状态、金额、到账时间 |
 
 ## 本地预览步骤
 
@@ -258,10 +279,10 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 0. 首页顶部为活动海报（点击放大），下方是商品卡、活动规则与参与门店
 1. 首页「立即参与」→ 选门店下单 → 自动模拟支付 → 进入邀请页拿到邀请码
 2. 把邀请码发给另一个微信号（真实登录后即为不同账号），从落地页 `?code=邀请码` 进入下单支付 → 计为 1 个有效邀请
-3. 集齐 N 人 → 邀请状态变「已达标」，自动生成佣金发放单
-4. 邀请页「模拟退款成功」→ 佣金「已到账」，资金流水记一笔
-5. 店员工作台（预览身份已绑定为演示店员）→ 核销 / 受理未核销取消
-6. 「运营」tab 看达标率、核销率；财务 tab 看佣金与取消两类资金流水
+3. 集齐 N 人 → 邀请状态变「已达标」，自动生成佣金发放单（金额取下单时的价格快照）
+4. 「运营」tab → **退款处理** → 核对金额后点「标记已退款」（未接支付前登记线下转账）→ 佣金「已到账」，资金流水记一笔
+5. 店员工作台 → 核销 / 受理未核销取消；取消会自动作废该单的邀请资格并回退未出款的佣金
+6. 「运营」tab 看达标率、核销率；资金流水 tab 看佣金与取消两类流水
 
 ## 关键实现（对齐 PRD）
 

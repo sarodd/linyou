@@ -36,16 +36,5 @@ Page({
   },
   goOrders() {
     wx.switchTab({ url: '/pages/orders/orders' })
-  },
-  // 预览：模拟渠道退款回调，查看佣金到账状态流转
-  async mockRefund(e) {
-    const result = e.currentTarget.dataset.result
-    if (!this.data.commission) return
-    const res = await api.mockRefund({ commissionId: this.data.commission._id, result })
-    if (res.ok) {
-      wx.showToast({ title: result === 'fail' ? '已标记异常' : '退款已确认到账', icon: 'success' })
-      this.setData({ loading: true })
-      this.load()
-    }
   }
 })

@@ -259,6 +259,9 @@ module.exports = {
   adminGrant: (d) => call('adminGrant', d),
   adminRevoke: (d) => call('adminRevoke', d),
   adminListAdmins: () => call('adminListAdmins'),
+  // 运营端退款处理（不调支付渠道，仅登记「该退 / 已退」）
+  adminCommissions: (d = {}) => call('adminCommissions', d),
+  adminMarkRefund: (d) => call('adminMarkRefund', d),
   // 角色读取 / 刷新
   getRole: () => getRole(),
   getIdentity: () => getIdentity(),

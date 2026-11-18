@@ -8,6 +8,7 @@
 
   <view class="tabs">
     <view class="tab {{tab === 'overview' ? 'active' : ''}}" bindtap="switchTab" data-tab="overview">运营看板</view>
+    <view class="tab {{tab === 'refunds' ? 'active' : ''}}" bindtap="switchTab" data-tab="refunds">退款处理</view>
     <view class="tab {{tab === 'finance' ? 'active' : ''}}" bindtap="switchTab" data-tab="finance">资金流水</view>
     <view class="tab {{tab === 'members' ? 'active' : ''}}" bindtap="switchTab" data-tab="members">成员管理</view>
   </view>
@@ -89,6 +90,28 @@
       <view class="member-add" bindtap="addAdmin">添加为管理员</view>
       <view class="member-tip">对方 openid 可在云开发控制台「数据库 → sessions」按最近登录时间查到。管理员可查看全部订单、配置活动、核销与管理成员。</view>
     </view>
+  </block>
+
+  <block wx:if="{{tab === 'refunds'}}">
+    <view class="refund-summary">
+      <view class="refund-summary-num">¥ {{refundTotal}}</view>
+      <view class="refund-summary-label">待处理 {{refunds.length}} 笔</view>
+    </view>
+    <view class="ledger">
+      <view class="refund-item" wx:for="{{refunds}}" wx:key="commissionId">
+        <view class="ledger-head">
+          <text class="type">{{item.storeName || '未记录门店'}} · {{item.orderNo}}</text>
+          <text class="amount">¥ {{item.amountYuan}}</text>
+        </view>
+        <view class="ledger-meta">买家 {{item.buyerShort}} · {{item.statusText}}</view>
+        <view class="ledger-meta">{{item.timeText}}</view>
+        <view class="refund-actions">
+          <view class="refund-btn" bindtap="markRefund" data-id="{{item.commissionId}}" data-amount="{{item.amountYuan}}">标记已退款</view>
+        </view>
+      </view>
+      <view wx:if="{{refunds.length === 0}}" class="empty-inline">没有待处理的退款</view>
+    </view>
+    <view class="notice">接入微信支付后此处直接调退款接口；当前用于登记线下退款，避免出现「用户已达标但没人处理」。标记后佣金状态变为已到账，并写入资金流水。</view>
   </block>
 
   <block wx:if="{{tab === 'finance'}}">
