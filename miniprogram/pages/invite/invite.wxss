@@ -1,0 +1,26 @@
+.page { min-height:100vh; background:#f6f7f9; padding-bottom:60rpx; }
+.loading { text-align:center; color:#999; padding:120rpx 0; }
+.hero { background:#fff; padding:44rpx 40rpx; }
+.hero-title { font-size:30rpx; color:#666; }
+.progress-num { font-size:32rpx; color:#333; margin-top:20rpx; }
+.big { font-size:64rpx; color:#07C160; font-weight:700; }
+.progress-bar { height:14rpx; background:#eee; border-radius:8rpx; margin-top:24rpx; overflow:hidden; }
+.progress-fill { height:100%; background:#07C160; border-radius:8rpx; transition:width .4s; }
+.hero-status { margin-top:24rpx; }
+.badge-green { display:inline-block; font-size:24rpx; color:#07C160; background:#e8f8ee; padding:8rpx 20rpx; border-radius:20rpx; }
+.badge-gray { display:inline-block; font-size:24rpx; color:#888; background:#f2f2f2; padding:8rpx 20rpx; border-radius:20rpx; }
+.card { background:#fff; margin:20rpx 24rpx 0; border-radius:16rpx; padding:30rpx; }
+.section-title { font-size:28rpx; font-weight:600; color:#333; margin-bottom:22rpx; }
+.code-box { display:flex; justify-content:space-between; align-items:center; background:#f0faf4; border:2rpx dashed #07C160; padding:28rpx; border-radius:12rpx; }
+.code { font-size:44rpx; font-weight:700; letter-spacing:6rpx; color:#07C160; }
+.copy { font-size:24rpx; color:#07C160; }
+.link-box { font-size:22rpx; color:#666; margin-top:20rpx; word-break:break-all; background:#f8f8f8; padding:18rpx; border-radius:8rpx; }
+.hint { font-size:22rpx; color:#aaa; margin-top:16rpx; line-height:1.6; }
+.row { display:flex; justify-content:space-between; font-size:28rpx; color:#555; padding:14rpx 0; }
+.green { color:#07C160; }
+.notice { font-size:22rpx; color:#aaa; margin:30rpx 40rpx; line-height:1.6; }
+.link-orders { text-align:center; font-size:28rpx; color:#07C160; padding:20rpx; }
+.btn-row { display:flex; gap:20rpx; }
+.btn-ok, .btn-fail { flex:1; text-align:center; font-size:27rpx; padding:22rpx; border-radius:10rpx; }
+.btn-ok { background:#e8f8ee; color:#07C160; }
+.btn-fail { background:#fdecec; color:#e64545; }

@@ -1,0 +1,46 @@
+/* 底部留白 = 吸底按钮栏 + 自定义 tabBar（100rpx） */
+.page { min-height: 100vh; background: #f4f8f3; padding-bottom: calc(260rpx + env(safe-area-inset-bottom)); }
+.loading { text-align: center; color: #999; padding: 120rpx 0; }
+
+/* 活动海报 */
+.poster-wrap { position: relative; width: 100%; overflow: hidden; }
+.poster { width: 100%; display: block; }
+.poster-zoom {
+  position: absolute; right: 24rpx; bottom: 24rpx; font-size: 22rpx; color: #fff;
+  background: rgba(0,0,0,.35); padding: 8rpx 18rpx; border-radius: 24rpx;
+}
+
+/* 商品卡 */
+.card { background: #fff; margin: 24rpx 24rpx 0; border-radius: 16rpx; padding: 30rpx; box-shadow: 0 4rpx 20rpx rgba(28,81,56,.05); }
+.goods-card { position: relative; margin-top: -1rpx; }
+.goods-name { font-size: 34rpx; font-weight: 700; color: #1f3329; }
+.goods-spec { font-size: 24rpx; color: #999; margin-top: 8rpx; }
+.price-row { margin-top: 20rpx; display: flex; align-items: baseline; }
+.price-symbol { font-size: 30rpx; color: #e64340; font-weight: 600; }
+.price-num { font-size: 72rpx; color: #e64340; font-weight: 800; line-height: 1; }
+.price-origin { font-size: 26rpx; color: #bbb; text-decoration: line-through; margin-left: 16rpx; }
+.price-badge { font-size: 22rpx; color: #fff; background: linear-gradient(135deg,#e64340,#ff7a45); padding: 6rpx 16rpx; border-radius: 8rpx; margin-left: auto; font-weight: 600; }
+
+.card-title { font-size: 30rpx; font-weight: 600; margin-bottom: 22rpx; color: #1f3329; }
+.rule-item { font-size: 27rpx; color: #555; line-height: 1.9; }
+.dot { display: inline-block; width: 36rpx; height: 36rpx; line-height: 36rpx; text-align: center; background: #e6f5ec; color: #137a4a; border-radius: 50%; font-size: 22rpx; margin-right: 12rpx; font-weight: 600; }
+.hl { color: #137a4a; font-weight: 700; }
+.deadline { font-size: 23rpx; color: #999; margin-top: 18rpx; padding-top: 18rpx; border-top: 1rpx solid #f0f0f0; }
+.store { padding: 18rpx 0; border-bottom: 1rpx solid #f2f2f2; }
+.store:last-child { border-bottom: none; }
+.store-name { font-size: 28rpx; font-weight: 500; color: #333; }
+.store-meta { font-size: 24rpx; color: #888; margin-top: 6rpx; }
+.store-stock { font-size: 22rpx; color: #137a4a; margin-top: 6rpx; }
+.notice { font-size: 22rpx; color: #aaa; text-align: center; margin: 30rpx 40rpx; }
+/* 首页是 tab 页，吸底按钮必须抬到自定义 tabBar（100rpx + 安全区）之上，否则会被盖住 */
+.bottom-bar { position: fixed; left: 0; right: 0; bottom: calc(100rpx + env(safe-area-inset-bottom)); background: #fff; padding: 16rpx 24rpx; box-shadow: 0 -2rpx 12rpx rgba(0,0,0,.05); z-index: 100; }
+.btn-primary { background: linear-gradient(135deg,#137a4a,#0a5c36); color: #fff; text-align: center; font-size: 32rpx; padding: 24rpx; border-radius: 12rpx; font-weight: 600; }
+
+/* 云端连接失败诊断 */
+.error-box { margin: 120rpx 48rpx; background: #fff; border-radius: 20rpx; padding: 56rpx 40rpx; text-align: center; box-shadow: 0 4rpx 24rpx rgba(0,0,0,.06); }
+.error-icon { width: 96rpx; height: 96rpx; line-height: 96rpx; margin: 0 auto 24rpx; border-radius: 50%; background: #fff1f0; color: #e64340; font-size: 56rpx; font-weight: 700; }
+.error-title { font-size: 34rpx; font-weight: 700; color: #333; }
+.error-code { display: inline-block; margin-top: 20rpx; font-size: 26rpx; color: #e64340; background: #fff1f0; padding: 8rpx 24rpx; border-radius: 8rpx; }
+.error-msg { font-size: 24rpx; color: #888; margin-top: 24rpx; line-height: 1.7; word-break: break-all; }
+.error-hint { font-size: 24rpx; color: #137a4a; background: #e6f5ec; border-radius: 12rpx; padding: 20rpx; margin-top: 30rpx; line-height: 1.7; }
+.error-retry { margin-top: 32rpx; font-size: 30rpx; color: #fff; background: #137a4a; border-radius: 12rpx; padding: 20rpx; font-weight: 600; }

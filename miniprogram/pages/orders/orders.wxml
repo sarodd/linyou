@@ -1,0 +1,29 @@
+<view class="page">
+  <!-- 仅在「系统还没有管理员」时出现的一次性引导，不展示任何身份信息 -->
+  <view wx:if="{{canSelfGrant}}" class="boot-card">
+    <view class="boot-tip">系统还没有管理员。可以把当前微信设为首位管理员，用于开启运营与店员功能。</view>
+    <view class="boot-btn {{granting ? 'disabled' : ''}}" bindtap="grantSelf">{{granting ? '设置中…' : '设为首位管理员'}}</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">加载中…</view>
+  <view wx:if="{{!loading && orders.length === 0}}" class="empty">
+    <view class="empty-icon">单</view>
+    <view class="empty-text">还没有订单</view>
+    <view class="btn-sm" bindtap="goHome">去参与活动</view>
+  </view>
+  <view class="order" wx:for="{{orders}}" wx:key="_id" bindtap="goDetail" data-id="{{item._id}}">
+    <view class="order-head">
+      <text class="store">{{item.storeName}}</text>
+      <text class="status status-{{item.status}}">{{item.statusText}}</text>
+    </view>
+    <view class="order-body">
+      <view class="goods">{{item.goodsName}} · {{item.spec}}</view>
+      <view class="order-no">订单号 {{item.orderNo}}</view>
+      <view class="created">{{item.createdText}}</view>
+    </view>
+    <view class="order-foot">
+      <text wx:if="{{item.inviteCode}}" class="invite-tag">邀请码 {{item.inviteCode}}</text>
+      <text class="amount">实付 ¥ {{item.amountYuan}}</text>
+    </view>
+  </view>
+</view>

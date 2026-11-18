@@ -1,0 +1,55 @@
+.page { min-height:100vh; background:#f6f7f9; padding-bottom:140rpx; }
+.tabs { display:flex; background:#fff; }
+.tab { flex:1; text-align:center; font-size:26rpx; padding:28rpx 0; color:#888; border-bottom:4rpx solid transparent; }
+.tab.active { color:#07C160; border-bottom-color:#07C160; font-weight:600; }
+.stat-grid { display:flex; flex-wrap:wrap; padding:20rpx; }
+.stat { width:33.33%; box-sizing:border-box; padding:12rpx; }
+.stat-num { background:#fff; border-radius:16rpx; text-align:center; font-size:44rpx; font-weight:700; color:#07C160; padding:32rpx 0 16rpx; }
+.stat-label { text-align:center; font-size:23rpx; color:#888; padding:12rpx 0 20rpx; }
+.notice { font-size:22rpx; color:#aaa; margin:20rpx 40rpx; line-height:1.6; }
+.ledger { padding:20rpx 24rpx; }
+.ledger-item { background:#fff; border-radius:16rpx; padding:26rpx; margin-bottom:18rpx; }
+.ledger-head { display:flex; justify-content:space-between; }
+.type { font-size:28rpx; font-weight:600; color:#333; }
+.amount { font-size:30rpx; color:#e64545; font-weight:600; }
+.ledger-meta { font-size:22rpx; color:#999; margin-top:10rpx; word-break:break-all; }
+.empty-inline { text-align:center; color:#999; font-size:26rpx; padding:80rpx 0; }
+
+.config-entry { display: flex; align-items: center; background: #fff; margin: 24rpx; padding: 28rpx 32rpx; border-radius: 20rpx; }
+.config-entry-icon { width: 72rpx; height: 72rpx; line-height: 72rpx; text-align: center; border-radius: 18rpx; background: #E8F8EF; color: #07C160; font-size: 40rpx; margin-right: 24rpx; }
+.config-entry-text { flex: 1; }
+.config-entry-title { font-size: 30rpx; font-weight: 600; color: #222; }
+.config-entry-sub { font-size: 24rpx; color: #999; margin-top: 6rpx; }
+.config-entry-arrow { font-size: 48rpx; color: #ccc; }
+
+.identity-card { background: #fff; margin: 0 24rpx 24rpx; padding: 26rpx 30rpx; border-radius: 20rpx; }
+.identity-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18rpx; }
+.identity-title { font-size: 28rpx; font-weight: 600; color: #222; }
+.identity-badge { font-size: 22rpx; padding: 6rpx 18rpx; border-radius: 24rpx; }
+.identity-badge.wx { color: #07C160; background: #E8F8EF; }
+.identity-badge.preview { color: #E6A23C; background: #FFF6E5; }
+.identity-row { display: flex; align-items: center; padding: 10rpx 0; font-size: 24rpx; }
+.identity-label { width: 160rpx; color: #999; flex-shrink: 0; }
+.identity-value { flex: 1; color: #333; word-break: break-all; }
+.identity-copy { color: #07C160; padding-left: 16rpx; }
+.identity-diag { display: flex; padding: 14rpx 0 4rpx; font-size: 22rpx; line-height: 1.5; }
+.identity-diag-label { width: 160rpx; color: #999; flex-shrink: 0; }
+.identity-diag-text { flex: 1; color: #E6A23C; word-break: break-all; }
+.identity-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 14rpx; padding-top: 18rpx; border-top: 1rpx solid #F0F0F0; }
+.identity-tip { font-size: 21rpx; color: #aaa; flex: 1; }
+.identity-relogin { font-size: 24rpx; color: #07C160; padding-left: 20rpx; }
+
+/* 成员管理 */
+.member-card { background:#fff; margin:20rpx 24rpx; border-radius:16rpx; padding:28rpx; }
+.member-title { font-size:28rpx; font-weight:600; color:#333; margin-bottom:20rpx; }
+.member-title-gap { margin-top:40rpx; padding-top:28rpx; border-top:1rpx solid #f2f2f2; }
+.member-row { display:flex; align-items:center; padding:20rpx 0; border-bottom:1rpx solid #f5f5f5; }
+.member-info { flex:1; min-width:0; }
+.member-openid { font-size:25rpx; color:#333; word-break:break-all; }
+.member-meta { font-size:22rpx; color:#aaa; margin-top:6rpx; }
+.member-tag { font-size:20rpx; color:#ff8c00; background:#fff5e6; padding:6rpx 14rpx; border-radius:8rpx; flex:none; }
+.member-remove { font-size:24rpx; color:#e64545; padding-left:20rpx; flex:none; }
+.member-input { width:100%; box-sizing:border-box; height:88rpx; background:#F7F8FA; border-radius:12rpx; padding:0 24rpx; font-size:26rpx; color:#222; }
+.member-add { margin-top:20rpx; background:#07C160; color:#fff; text-align:center; font-size:28rpx; padding:20rpx; border-radius:10rpx; }
+.member-tip { font-size:22rpx; color:#aaa; line-height:1.6; margin-top:20rpx; }
+.identity-value.admin { color:#07C160; font-weight:600; }

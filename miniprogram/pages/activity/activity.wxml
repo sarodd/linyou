@@ -1,0 +1,38 @@
+<view class="page">
+  <view wx:if="{{activity}}" class="goods">
+    <view class="goods-name">{{activity.goodsName}}</view>
+    <view class="goods-spec">规格：{{activity.spec}}</view>
+    <view class="goods-price">¥ {{activity.priceYuan}}</view>
+  </view>
+
+  <view class="card">
+    <view class="section-title">选择提货门店</view>
+    <picker mode="selector" range="{{stores}}" range-key="name" value="{{storeIndex}}" bindchange="onStoreChange">
+      <view class="picker">
+        <view>
+          <view class="picker-name">{{stores[storeIndex].name}}</view>
+          <view class="picker-addr">{{stores[storeIndex].address}} · {{stores[storeIndex].hours}}</view>
+        </view>
+        <view class="arrow">›</view>
+      </view>
+    </picker>
+  </view>
+
+  <view class="card">
+    <view class="section-title">邀请码（选填）</view>
+    <input class="input" placeholder="填写好友邀请码，可为其计入有效邀请" value="{{inviteCode}}" bindinput="onInviteInput" />
+    <view class="hint">支付成功后不可修改或补绑邀请关系</view>
+  </view>
+
+  <view class="card">
+    <view class="row"><text>商品金额</text><text>¥ {{activity.priceYuan}}</text></view>
+    <view class="row"><text>预计返佣</text><text class="green">¥ {{activity.priceYuan}}</text></view>
+    <view class="row total"><text>实付</text><text class="red">¥ {{activity.priceYuan}}</text></view>
+  </view>
+
+  <view class="notice">达标后佣金按实付款原路返还，未核销商品取消须到订单指定门店办理</view>
+
+  <view class="bottom-bar">
+    <view class="btn-primary {{submitting ? 'disabled' : ''}}" bindtap="submit">确认并支付 ¥{{activity.priceYuan}}</view>
+  </view>
+</view>

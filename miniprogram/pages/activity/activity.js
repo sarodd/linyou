@@ -1,0 +1,61 @@
+const api = require('../../utils/api')
+
+Page({
+  data: {
+    activity: null,
+    stores: [],
+    storeIndex: 0,
+    inviteCode: '',
+    submitting: false
+  },
+  onLoad(options) {
+    if (options.code) this.setData({ inviteCode: String(options.code).toUpperCase() })
+    this.load()
+  },
+  async load() {
+    const res = await api.getActivity()
+    if (res.ok) {
+      this.setData({
+        activity: Object.assign({}, res.activity, { priceYuan: api.fen2yuan(res.activity.priceFen) }),
+        stores: res.stores
+      })
+    }
+  },
+  onStoreChange(e) {
+    this.setData({ storeIndex: Number(e.detail.value) })
+  },
+  onInviteInput(e) {
+    this.setData({ inviteCode: e.detail.value })
+  },
+  async submit() {
+    if (this.data.submitting) return
+    const store = this.data.stores[this.data.storeIndex]
+    if (!store) {
+      wx.showToast({ title: '暂无可下单门店', icon: 'none' })
+      return
+    }
+    this.setData({ submitting: true })
+    wx.showLoading({ title: '提交中' })
+    const res = await api.createOrder({ storeId: store._id, inviteCode: this.data.inviteCode })
+    wx.hideLoading()
+    this.setData({ submitting: false })
+    if (!res.ok) {
+      const map = {
+        ALREADY_ORDERED: '本活动你已有订单', OUT_OF_STOCK: '该门店已售罄',
+        INVALID_INVITE_CODE: '邀请码无效', SELF_INVITE: '不能邀请自己',
+        ACTIVITY_ENDED: '活动已结束', ORDER_DEADLINE_PASSED: '已过下单截止时间'
+      }
+      wx.showToast({ title: map[res.code] || '下单失败', icon: 'none' })
+      return
+    }
+    // 下单成功 -> 模拟支付 -> 跳转邀请进度
+    wx.showLoading({ title: '模拟支付中' })
+    const pay = await api.mockPay({ orderId: res.order._id })
+    wx.hideLoading()
+    if (!pay.ok) {
+      wx.showToast({ title: '支付处理异常', icon: 'none' })
+      return
+    }
+    wx.redirectTo({ url: `/pages/invite/invite?id=${pay.invitationId}` })
+  }
+})

@@ -1,0 +1,182 @@
+<view class="page">
+  <view wx:if="{{noAccess}}" class="no-access-mask">
+    <view class="no-access-icon">锁</view>
+    <view class="no-access-title">仅管理员可访问</view>
+    <view class="no-access-sub">活动配置属于管理功能，请在「我的订单」页把当前微信账号设为管理员。</view>
+    <view class="no-access-btn" bindtap="goHome">返回活动</view>
+  </view>
+  <view class="tabs">
+    <view class="tab {{tab === 'activity' ? 'active' : ''}}" bindtap="switchTab" data-tab="activity">活动 / 商品</view>
+    <view class="tab {{tab === 'store' ? 'active' : ''}}" bindtap="switchTab" data-tab="store">活动门店</view>
+    <view class="tab {{tab === 'poster' ? 'active' : ''}}" bindtap="switchTab" data-tab="poster">活动海报</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">加载中…</view>
+
+  <!-- 活动 / 商品 -->
+  <block wx:if="{{!loading && tab === 'activity'}}">
+    <view class="card">
+      <view class="section-title">基本信息</view>
+      <view class="field">
+        <view class="label">品牌名</view>
+        <input class="input" value="{{form.brand}}" bindinput="onField" data-key="brand" placeholder="邻友购" />
+      </view>
+      <view class="field">
+        <view class="label">活动名称 <text class="req">*</text></view>
+        <input class="input" value="{{form.name}}" bindinput="onField" data-key="name" placeholder="活动名称" />
+      </view>
+      <view class="field">
+        <view class="label">活动副标题</view>
+        <input class="input" value="{{form.subtitle}}" bindinput="onField" data-key="subtitle" placeholder="邀请 3 位好友下单，你的订单全额退" />
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="section-title">商品与佣金</view>
+      <view class="field">
+        <view class="label">商品名称 <text class="req">*</text></view>
+        <input class="input" value="{{form.goodsName}}" bindinput="onField" data-key="goodsName" placeholder="商品名称" />
+      </view>
+      <view class="field">
+        <view class="label">规格</view>
+        <input class="input" value="{{form.spec}}" bindinput="onField" data-key="spec" placeholder="如：单瓶装" />
+      </view>
+      <view class="field-row">
+        <view class="field half">
+          <view class="label">售价（元）</view>
+          <input class="input" type="digit" value="{{form.priceYuan}}" bindinput="onField" data-key="priceYuan" placeholder="129.00" />
+        </view>
+        <view class="field half">
+          <view class="label">划线价（元）</view>
+          <input class="input" type="digit" value="{{form.originalPriceYuan}}" bindinput="onField" data-key="originalPriceYuan" placeholder="198.00" />
+        </view>
+      </view>
+      <view class="field">
+        <view class="label">邀请达标人数 N（买三退一填 3）</view>
+        <input class="input" type="number" value="{{form.inviteTarget}}" bindinput="onField" data-key="inviteTarget" placeholder="3" />
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="section-title">活动时间</view>
+      <view class="field">
+        <view class="label-row">
+          <view class="label">下单截止</view>
+          <view class="clear-btn" wx:if="{{orderDate}}" bindtap="clearDeadline" data-key="order">清除</view>
+        </view>
+        <view class="picker-row">
+          <picker class="picker-half" mode="date" value="{{orderDate}}" bindchange="onDeadlinePart" data-key="order" data-part="Date">
+            <view class="picker-input {{orderDate ? '' : 'ph'}}">{{orderDate || '选择日期'}}</view>
+          </picker>
+          <picker class="picker-half" mode="time" value="{{orderTime}}" bindchange="onDeadlinePart" data-key="order" data-part="Time">
+            <view class="picker-input {{orderTime ? '' : 'ph'}}">{{orderTime || '选择时间'}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="field">
+        <view class="label-row">
+          <view class="label">邀请截止</view>
+          <view class="clear-btn" wx:if="{{inviteDate}}" bindtap="clearDeadline" data-key="invite">清除</view>
+        </view>
+        <view class="picker-row">
+          <picker class="picker-half" mode="date" value="{{inviteDate}}" bindchange="onDeadlinePart" data-key="invite" data-part="Date">
+            <view class="picker-input {{inviteDate ? '' : 'ph'}}">{{inviteDate || '选择日期'}}</view>
+          </picker>
+          <picker class="picker-half" mode="time" value="{{inviteTime}}" bindchange="onDeadlinePart" data-key="invite" data-part="Time">
+            <view class="picker-input {{inviteTime ? '' : 'ph'}}">{{inviteTime || '选择时间'}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="field">
+        <view class="label-row">
+          <view class="label">核销截止</view>
+          <view class="clear-btn" wx:if="{{verifyDate}}" bindtap="clearDeadline" data-key="verify">清除</view>
+        </view>
+        <view class="picker-row">
+          <picker class="picker-half" mode="date" value="{{verifyDate}}" bindchange="onDeadlinePart" data-key="verify" data-part="Date">
+            <view class="picker-input {{verifyDate ? '' : 'ph'}}">{{verifyDate || '选择日期'}}</view>
+          </picker>
+          <picker class="picker-half" mode="time" value="{{verifyTime}}" bindchange="onDeadlinePart" data-key="verify" data-part="Time">
+            <view class="picker-input {{verifyTime ? '' : 'ph'}}">{{verifyTime || '选择时间'}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="tip-inline">点击分别选择日期和时间；清除后保存表示该截止不限制。</view>
+    </view>
+
+    <button class="save-btn" loading="{{saving}}" bindtap="saveActivity">保存活动 / 商品配置</button>
+    <view class="tip">保存后立即写入云端，首页重新进入即可看到最新配置。</view>
+  </block>
+
+  <!-- 门店 -->
+  <block wx:if="{{!loading && tab === 'store'}}">
+    <view class="card">
+      <view class="section-head">
+        <view class="section-title">门店列表（{{stores.length}}）</view>
+        <view class="add-btn" bindtap="addStore">+ 新增</view>
+      </view>
+      <view class="store-item" wx:for="{{stores}}" wx:key="_id">
+        <view class="store-main">
+          <view class="store-name">{{item.name}}</view>
+          <view class="store-meta">{{item.address || '暂无地址'}}</view>
+          <view class="store-meta">{{item.hours || '--'}} · {{item.phone || '--'}} · 库存 {{item.stock}}</view>
+        </view>
+        <view class="store-ops">
+          <text class="op" bindtap="editStore" data-store="{{item}}">编辑</text>
+          <text class="op danger" bindtap="deleteStore" data-id="{{item._id}}" data-name="{{item.name}}">删除</text>
+        </view>
+      </view>
+      <view wx:if="{{stores.length === 0}}" class="empty-inline">暂无门店，点「+ 新增」添加</view>
+    </view>
+
+    <view wx:if="{{storeEdit}}" class="card">
+      <view class="section-title">{{storeEdit._id ? '编辑门店' : '新增门店'}}</view>
+      <view class="field">
+        <view class="label">门店名称 <text class="req">*</text></view>
+        <input class="input" value="{{storeEdit.name}}" bindinput="onStoreField" data-key="name" placeholder="邻友购·XX店" />
+      </view>
+      <view class="field">
+        <view class="label">地址</view>
+        <input class="input" value="{{storeEdit.address}}" bindinput="onStoreField" data-key="address" placeholder="门店地址" />
+      </view>
+      <view class="field-row">
+        <view class="field half">
+          <view class="label">营业时间</view>
+          <input class="input" value="{{storeEdit.hours}}" bindinput="onStoreField" data-key="hours" placeholder="10:00-22:00" />
+        </view>
+        <view class="field half">
+          <view class="label">电话</view>
+          <input class="input" value="{{storeEdit.phone}}" bindinput="onStoreField" data-key="phone" placeholder="联系电话" />
+        </view>
+      </view>
+      <view class="field">
+        <view class="label">库存</view>
+        <input class="input" type="number" value="{{storeEdit.stock}}" bindinput="onStoreField" data-key="stock" placeholder="0" />
+      </view>
+      <view class="btn-row">
+        <button class="save-btn small" loading="{{saving}}" bindtap="saveStore">保存</button>
+        <button class="cancel-btn small" bindtap="cancelStoreEdit">取消</button>
+      </view>
+    </view>
+  </block>
+
+  <!-- 海报 -->
+  <block wx:if="{{!loading && tab === 'poster'}}">
+    <view class="card">
+      <view class="section-title">当前活动海报</view>
+      <image class="poster-preview" src="{{posterSrc}}" mode="widthFix" bindtap="previewPoster" />
+      <view class="tip center">点击图片可放大查看 · {{posterCloud ? '云端自定义海报' : '项目内置默认海报'}}</view>
+    </view>
+    <view class="card">
+      <view class="section-title">更换海报</view>
+      <button class="save-btn" loading="{{saving}}" bindtap="choosePoster">从相册 / 拍照选择图片</button>
+      <button class="cancel-btn" bindtap="resetPoster">恢复默认海报</button>
+      <view class="tip">海报要求：竖版，宽高比约 2:3（推荐 720×1080 或 1024×1536），宽度不低于 720px 以保证清晰度；支持 JPG / PNG，2MB 以内（超出会自动压缩）；文字信息建议直接做进海报图，页面不再叠加标题。选图后自动压缩并分片上传到云端，首页海报立即更新。</view>
+    </view>
+  </block>
+
+  <view wx:if="{{toast}}" class="toast">{{toast}}</view>
+
+  <!-- 离屏画布：用于压缩海报图片，固定定位移到屏幕外不影响布局 -->
+  <canvas type="2d" id="poster-canvas" class="offscreen-canvas"></canvas>
+</view>

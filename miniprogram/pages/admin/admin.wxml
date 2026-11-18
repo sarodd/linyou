@@ -1,0 +1,107 @@
+<view class="page">
+  <view wx:if="{{noAccess}}" class="no-access-mask">
+    <view class="no-access-icon">锁</view>
+    <view class="no-access-title">仅管理员可访问</view>
+    <view class="no-access-sub">运营看板与配置属于管理功能，请在「我的订单」页把当前微信账号设为管理员。</view>
+    <view class="no-access-btn" bindtap="goHome">返回活动</view>
+  </view>
+
+  <view class="tabs">
+    <view class="tab {{tab === 'overview' ? 'active' : ''}}" bindtap="switchTab" data-tab="overview">运营看板</view>
+    <view class="tab {{tab === 'finance' ? 'active' : ''}}" bindtap="switchTab" data-tab="finance">资金流水</view>
+    <view class="tab {{tab === 'members' ? 'active' : ''}}" bindtap="switchTab" data-tab="members">成员管理</view>
+  </view>
+
+  <view class="config-entry" bindtap="goConfig">
+    <view class="config-entry-icon">⚙</view>
+    <view class="config-entry-text">
+      <view class="config-entry-title">活动配置</view>
+      <view class="config-entry-sub">活动 · 商品 · 门店 · 海报</view>
+    </view>
+    <view class="config-entry-arrow">›</view>
+  </view>
+
+  <view wx:if="{{identity}}" class="identity-card">
+    <view class="identity-head">
+      <text class="identity-title">当前登录身份</text>
+      <text class="identity-badge {{identity.modeClass}}">{{identity.modeText}}</text>
+    </view>
+    <view class="identity-row" bindtap="copyOpenid">
+      <text class="identity-label">openid</text>
+      <text class="identity-value">{{identity.openid}}</text>
+      <text class="identity-copy">复制</text>
+    </view>
+    <view class="identity-row">
+      <text class="identity-label">角色</text>
+      <text class="identity-value {{identity.roleClass}}">{{identity.roleText}}</text>
+    </view>
+    <view class="identity-row">
+      <text class="identity-label">AppSecret</text>
+      <text class="identity-value">{{identity.appSecretText}}</text>
+    </view>
+    <view class="identity-row">
+      <text class="identity-label">运营权限</text>
+      <text class="identity-value">{{identity.isAdminText}}</text>
+    </view>
+    <view wx:if="{{identity.diagText}}" class="identity-diag">
+      <text class="identity-diag-label">登录诊断</text>
+      <text class="identity-diag-text">{{identity.diagText}}</text>
+    </view>
+    <view class="identity-foot">
+      <text class="identity-tip">微信登录为静默识别，不会弹授权框；复制 openid 可填 ADMIN_OPENIDS 白名单</text>
+      <text class="identity-relogin" bindtap="reLogin">重新登录·诊断</text>
+    </view>
+  </view>
+
+  <block wx:if="{{tab === 'overview'}}">
+    <view wx:if="{{stats}}" class="stat-grid">
+      <view class="stat"><view class="stat-num">{{stats.paidOrderCount}}</view><view class="stat-label">已支付订单</view></view>
+      <view class="stat"><view class="stat-num">{{stats.lockedCount}}</view><view class="stat-label">已达标锁定</view></view>
+      <view class="stat"><view class="stat-num">{{stats.achievedRate}}</view><view class="stat-label">达标率</view></view>
+      <view class="stat"><view class="stat-num">{{stats.commissionPaid}}</view><view class="stat-label">佣金已到账</view></view>
+      <view class="stat"><view class="stat-num">{{stats.verifyRate}}</view><view class="stat-label">核销率</view></view>
+      <view class="stat"><view class="stat-num">{{stats.inviteTarget}}</view><view class="stat-label">邀请门槛N</view></view>
+    </view>
+    <view class="notice">运营看板追踪有效邀请订单数、达标率、佣金到账率、核销率等指标（对齐 PRD 第 8 节）</view>
+  </block>
+
+  <block wx:if="{{tab === 'members'}}">
+    <view class="member-card">
+      <view class="member-title">管理员列表</view>
+      <view wx:if="{{envAdmins.length}}" class="member-row">
+        <view class="member-info">
+          <view class="member-openid">{{envAdmins[0]}}</view>
+          <view class="member-meta">环境变量白名单 · 需在云函数配置中修改</view>
+        </view>
+        <text class="member-tag">环境变量</text>
+      </view>
+      <view class="member-row" wx:for="{{admins}}" wx:key="openid">
+        <view class="member-info">
+          <view class="member-openid">{{item.openid}}</view>
+          <view class="member-meta">添加于 {{item.timeText}}</view>
+        </view>
+        <text class="member-remove" bindtap="removeAdmin" data-openid="{{item.openid}}">移除</text>
+      </view>
+      <view wx:if="{{!admins.length && !envAdmins.length}}" class="empty-inline">暂无管理员</view>
+
+      <view class="member-title member-title-gap">添加管理员</view>
+      <input class="member-input" value="{{newAdmin}}" bindinput="onNewAdmin" placeholder="粘贴对方 openid（wx_ 开头）" />
+      <view class="member-add" bindtap="addAdmin">添加为管理员</view>
+      <view class="member-tip">对方 openid 可在云开发控制台「数据库 → sessions」按最近登录时间查到。管理员可查看全部订单、配置活动、核销与管理成员。</view>
+    </view>
+  </block>
+
+  <block wx:if="{{tab === 'finance'}}">
+    <view class="ledger">
+      <view class="ledger-item" wx:for="{{ledger}}" wx:key="_id">
+        <view class="ledger-head">
+          <text class="type">{{item.typeText}}</text>
+          <text class="amount">¥ {{item.amountYuan}}</text>
+        </view>
+        <view class="ledger-meta">{{item.statusText}} · 单号 {{item.refundNo || item._id}}</view>
+        <view class="ledger-meta">{{item.timeText}}</view>
+      </view>
+      <view wx:if="{{ledger.length === 0}}" class="empty-inline">暂无资金流水</view>
+    </view>
+  </block>
+</view>

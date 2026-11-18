@@ -1,0 +1,86 @@
+<view class="page">
+  <!-- 个人资料卡：头像与昵称都由用户自己设置（微信不再提供昵称头像） -->
+  <view class="hero">
+    <view class="avatar-box">
+      <button class="avatar-btn" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+        <image wx:if="{{avatar}}" class="avatar" src="{{avatar}}" mode="aspectFill" />
+        <view wx:else class="avatar avatar-ph">{{initial || '我'}}</view>
+      </button>
+      <view class="avatar-mask">换</view>
+    </view>
+    <view class="hero-info">
+      <input
+        class="nick-input"
+        type="nickname"
+        value="{{nickname}}"
+        maxlength="{{nickMax}}"
+        placeholder="点击设置昵称"
+        placeholder-class="nick-ph"
+        bindblur="onNickChange"
+        bindconfirm="onNickChange"
+      />
+      <view class="hero-meta">
+        <text class="chip {{isAdmin ? 'chip-admin' : ''}}">{{roleText}}</text>
+        <text class="chip chip-ghost">{{loginText}}</text>
+        <text wx:if="{{saving}}" class="chip chip-saving">保存中…</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 我的数据 -->
+  <view class="stats">
+    <view class="stat" bindtap="goOrders">
+      <view class="stat-num">{{stats.total}}</view>
+      <view class="stat-label">全部订单</view>
+    </view>
+    <view class="stat" bindtap="goOrders">
+      <view class="stat-num">{{stats.paid}}</view>
+      <view class="stat-label">待核销</view>
+    </view>
+    <view class="stat" bindtap="goOrders">
+      <view class="stat-num">{{stats.verified}}</view>
+      <view class="stat-label">已核销</view>
+    </view>
+  </view>
+
+  <!-- 账号信息 -->
+  <view class="card">
+    <view class="row" bindtap="copyOpenid">
+      <text class="row-label">openid</text>
+      <text class="row-value mono">{{openid || '-'}}</text>
+      <text class="row-action">复制</text>
+    </view>
+    <view class="row">
+      <text class="row-label">登录方式</text>
+      <text class="row-value">{{loginText}}</text>
+    </view>
+    <view class="row">
+      <text class="row-label">身份</text>
+      <text class="row-value">{{roleText}}</text>
+    </view>
+    <view wx:if="{{updatedText}}" class="row">
+      <text class="row-label">资料更新</text>
+      <text class="row-value">{{updatedText}}</text>
+    </view>
+  </view>
+
+  <!-- 常用入口 -->
+  <view class="card menu">
+    <view class="menu-item" bindtap="goOrders">
+      <text>我的订单</text>
+      <text class="arrow">›</text>
+    </view>
+    <view class="menu-item" bindtap="goIndex">
+      <text>活动首页</text>
+      <text class="arrow">›</text>
+    </view>
+    <view wx:if="{{isAdmin}}" class="menu-item" bindtap="goAdmin">
+      <text>运营后台</text>
+      <text class="arrow">›</text>
+    </view>
+  </view>
+
+  <view class="tip">昵称与头像仅保存在本小程序，用于订单与邀请页展示</view>
+
+  <canvas type="2d" id="avatar-canvas" class="offscreen-canvas"></canvas>
+</view>

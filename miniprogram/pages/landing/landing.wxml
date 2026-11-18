@@ -1,0 +1,18 @@
+<view class="page">
+  <view class="card">
+    <view class="avatar">礼</view>
+    <view class="title">好友邀请你参与活动</view>
+    <view class="sub">通过你的邀请下单并支付，可为好友计入一次有效邀请</view>
+    <view class="code-row">
+      <text class="code-label">邀请码</text>
+      <text class="code">{{code}}</text>
+    </view>
+  </view>
+  <view class="tips">
+    <view class="tip">· 需购买相同活动及规格，且在邀请截止前完成支付</view>
+    <view class="tip">· 按账号去重，自邀与重复订单不计入</view>
+    <view class="tip">· 支付成功后不可补绑或修改归因</view>
+  </view>
+  <view class="btn-primary" bindtap="goOrder">接受邀请并下单</view>
+  <view class="btn-ghost" bindtap="goHome">先看看活动</view>
+</view>

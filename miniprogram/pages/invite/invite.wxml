@@ -1,0 +1,42 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading">加载中…</view>
+
+  <block wx:if="{{!loading && inv}}">
+    <view class="hero">
+      <view class="hero-title">邀请进度</view>
+      <view class="progress-num"><text class="big">{{inv.validCount}}</text> / {{inv.target}} 人</view>
+      <view class="progress-bar"><view class="progress-fill" style="width:{{percent}}%"></view></view>
+      <view class="hero-status">
+        <text wx:if="{{inv.status === 'locked'}}" class="badge-green">已达标 · 佣金发放中</text>
+        <text wx:else class="badge-gray">累计中 · 还差 {{inv.target - inv.validCount}} 人</text>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="section-title">我的邀请码</view>
+      <view class="code-box" bindtap="copyCode">
+        <text class="code">{{inv.code}}</text>
+        <text class="copy">点击复制</text>
+      </view>
+      <view class="link-box" bindtap="copyLink">带参邀请路径：{{path}}</view>
+      <view class="hint">分享给好友，通过邀请码下单并支付即计入有效邀请（按账号去重）</view>
+    </view>
+
+    <view class="card">
+      <view class="row"><text>预计佣金</text><text class="green">¥ {{inv.amountYuan}}</text></view>
+      <view class="row"><text>邀请截止</text><text>{{inv.inviteDeadline}}</text></view>
+      <view class="row" wx:if="{{commission}}"><text>发放状态</text><text class="green">{{commission.status === 'paid' ? '已到账' : commission.status === 'exception' ? '异常' : '发放中'}}</text></view>
+    </view>
+
+    <view class="card" wx:if="{{commission && commission.status !== 'paid'}}">
+      <view class="section-title">预览：模拟渠道退款结果</view>
+      <view class="btn-row">
+        <view class="btn-ok" bindtap="mockRefund" data-result="success">模拟退款成功</view>
+        <view class="btn-fail" bindtap="mockRefund" data-result="fail">模拟退款失败</view>
+      </view>
+    </view>
+
+    <view class="notice">佣金以原订单实付款原路退款实现，微信支付账单可能显示退款。仅展示汇总人数，保护受邀人身份。</view>
+    <view class="link-orders" bindtap="goOrders">查看我的订单 →</view>
+  </block>
+</view>

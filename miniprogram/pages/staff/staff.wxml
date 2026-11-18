@@ -1,0 +1,33 @@
+<view class="page">
+  <view wx:if="{{noAccess}}" class="no-access-mask">
+    <view class="no-access-icon">锁</view>
+    <view class="no-access-title">仅管理员可访问</view>
+    <view class="no-access-sub">店员工作台属于管理功能，请在「我的订单」页把当前微信账号设为管理员。</view>
+    <view class="no-access-btn" bindtap="goHome">返回活动</view>
+  </view>
+  <view wx:if="{{loading}}" class="loading">加载中…</view>
+
+  <view wx:if="{{!loading && notStaff}}" class="empty">
+    <view class="empty-icon">店</view>
+    <view class="empty-text">当前账号未绑定店员身份</view>
+    <view class="empty-sub">演示数据初始化时已将当前账号绑定为店员，请先在活动页完成初始化</view>
+  </view>
+
+  <block wx:if="{{!loading && !notStaff}}">
+    <view class="header">店员工作台</view>
+    <view wx:if="{{orders.length === 0}}" class="empty-inline">暂无待处理订单</view>
+    <view class="order" wx:for="{{orders}}" wx:key="_id">
+      <view class="order-head">
+        <text class="goods">{{item.goodsName}}</text>
+        <text class="status status-{{item.status}}">{{item.statusText}}</text>
+      </view>
+      <view class="info">订单号 {{item.orderNo}}</view>
+      <view class="info">{{item.storeName}}</view>
+      <view class="info">实付 ¥ {{item.amountYuan}} · 活动佣金 ¥ {{item.amountYuan}}</view>
+      <view class="actions" wx:if="{{item.status === 'paid'}}">
+        <view class="btn-verify" bindtap="verify" data-id="{{item._id}}">扫码核销</view>
+        <view class="btn-cancel" bindtap="cancel" data-id="{{item._id}}">受理取消</view>
+      </view>
+    </view>
+  </block>
+</view>

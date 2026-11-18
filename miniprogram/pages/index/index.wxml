@@ -1,0 +1,57 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading">加载中…</view>
+
+  <!-- 云端连接失败时给出明确诊断，避免白屏 -->
+  <view wx:if="{{!loading && error}}" class="error-box">
+    <view class="error-icon">!</view>
+    <view class="error-title">云端连接失败</view>
+    <view class="error-code">{{error.code}}</view>
+    <view class="error-msg">{{error.message}}</view>
+    <view class="error-hint">请在「详情 → 本地设置」勾选「不校验合法域名」后重新编译；真机预览需在公众平台配置 request 合法域名</view>
+    <view class="error-retry" bindtap="load">重新加载</view>
+  </view>
+
+  <block wx:if="{{!loading && activity}}">
+    <!-- 活动海报（点击可放大预览），文字信息全部由海报图承载 -->
+    <view class="poster-wrap" bindtap="previewPoster">
+      <image class="poster" src="{{activity.posterSrc || '/images/poster.jpg'}}" mode="widthFix" />
+      <view class="poster-zoom">点击查看大图</view>
+    </view>
+
+    <!-- 商品信息卡 -->
+    <view class="card goods-card">
+      <view class="goods-name">{{activity.goodsName}}</view>
+      <view class="goods-spec">{{activity.spec}}</view>
+      <view class="price-row">
+        <text class="price-symbol">¥</text>
+        <text class="price-num">{{activity.priceYuan}}</text>
+        <text class="price-origin">¥{{activity.originalPriceYuan}}</text>
+        <text class="price-badge">买{{activity.inviteTarget}}退一</text>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">活动规则</view>
+      <view class="rule-item"><text class="dot">1</text>支付 {{activity.priceYuan}} 元下单，获得专属邀请码与链接</view>
+      <view class="rule-item"><text class="dot">2</text>邀请 <text class="hl">{{activity.inviteTarget}}</text> 位好友下单支付即达标</view>
+      <view class="rule-item"><text class="dot">3</text>达标后 {{activity.priceYuan}} 元佣金自动原路返还（买{{activity.inviteTarget}}退一）</view>
+      <view class="rule-item"><text class="dot">4</text>未核销取消须到原订单指定门店办理</view>
+      <view class="deadline">下单截止 {{activity.orderDeadlineText}} · 邀请截止 {{activity.inviteDeadlineText}}</view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">参与门店（{{stores.length}}）</view>
+      <view class="store" wx:for="{{stores}}" wx:key="_id">
+        <view class="store-name">{{item.name}}</view>
+        <view class="store-meta">{{item.address}} · {{item.hours}}</view>
+        <view class="store-stock">库存 {{item.stock}}</view>
+      </view>
+    </view>
+
+    <view class="notice">预览版说明：支付与退款为模拟流程，不涉及真实资金</view>
+  </block>
+
+  <view class="bottom-bar">
+    <view class="btn-primary" bindtap="goActivity">立即参与</view>
+  </view>
+</view>

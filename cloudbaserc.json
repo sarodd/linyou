@@ -1,0 +1,20 @@
+{
+  "envId": "linyougo-dev-d0gkgswl0504c86e2",
+  "framework": {
+    "name": "linyou",
+    "plugins": {}
+  },
+  "functions": [
+    {
+      "name": "api",
+      "path": "cloudfunctions/api",
+      "runtime": "Nodejs18.15",
+      "installDependency": false,
+      "timeout": 20,
+      "memorySize": 256,
+      "envVariables": {
+        "WX_APPID": "wxc924d24af61816e9"
+      }
+    }
+  ]
+}

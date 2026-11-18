@@ -1,0 +1,37 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/activity/activity",
+    "pages/orders/orders",
+    "pages/order-detail/order-detail",
+    "pages/invite/invite",
+    "pages/landing/landing",
+    "pages/staff/staff",
+    "pages/admin/admin",
+    "pages/mine/mine",
+    "pages/config/config"
+  ],
+  "window": {
+    "backgroundColor": "#F6F7F9",
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#07C160",
+    "navigationBarTitleText": "邻友购 · 邀请达标返佣",
+    "navigationBarTextStyle": "white"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#8A8F99",
+    "selectedColor": "#07C160",
+    "backgroundColor": "#FFFFFF",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "活动" },
+      { "pagePath": "pages/orders/orders", "text": "我的订单" },
+      { "pagePath": "pages/staff/staff", "text": "店员" },
+      { "pagePath": "pages/admin/admin", "text": "运营" },
+      { "pagePath": "pages/mine/mine", "text": "我的" }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}
