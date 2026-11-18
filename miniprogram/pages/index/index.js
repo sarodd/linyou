@@ -25,7 +25,8 @@ Page({
     this.setData({ loading: true, error: null })
     let res = await api.getActivity()
     const firstErr = (!res.ok) ? res : null
-    if (!res.ok || !res.activity) {
+    // 只在云端确实还没有活动时初始化；网络抖动/服务异常一律不碰线上配置
+    if (!res.ok && res.code === 'NO_ACTIVITY') {
       await api.seed()
       res = await api.getActivity()
     }

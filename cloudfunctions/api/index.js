@@ -354,9 +354,18 @@ async function ensureCollections() {
   }
 }
 
-async function seed() {
+async function seed(event) {
   await ensureCollections()
   const activityId = 'act_linyou_v1'
+  // 防覆盖：默认只在活动不存在时初始化演示数据。
+  // 自检脚本（e2eTest / edgeTest）需要回到出厂状态时显式传 force:true。
+  const exist = await db.collection(C.ACTIVITY).doc(activityId).get().catch(() => null)
+  if (exist && exist.data && !(event && event.force)) {
+    return {
+      ok: true, skipped: true,
+      message: '活动已存在，跳过初始化（不会覆盖线上配置）'
+    }
+  }
   // HTTP 预览身份（前端固定用 preview）与 CLI/e2e 身份都建为演示店员，保证核销/取消可体验
   const activity = {
     _id: activityId,
@@ -416,7 +425,12 @@ async function upsert(coll, id, data) {
 }
 
 async function getActivity() {
-  const act = await db.collection(C.ACTIVITY).doc('act_linyou_v1').get()
+  const act = await db.collection(C.ACTIVITY).doc('act_linyou_v1').get().catch(() => null)
+  // 活动不存在时给出明确 code，便于前端只在「真的没数据」时初始化，
+  // 而不是任何一次网络抖动都触发 seed（那会把运营配置覆盖成演示数据）
+  if (!act || !act.data) {
+    return { ok: false, code: 'NO_ACTIVITY', message: '云端还没有活动配置' }
+  }
   const stores = await db.collection(C.STORE).where({ stock: _.gt(0) }).get()
   const a = Object.assign({}, act.data)
   // 海报：有云端 base64 时标记 posterCloud=true，前端用 HTTP 图片接口地址；base64 本身不回传
@@ -1067,7 +1081,7 @@ async function e2eTest() {
 
   // 1) 初始化（店员身份）
   __testOpenid = 'staff'
-  await run('初始化活动/门店/店员', () => seed())
+  await run('初始化活动/门店/店员', () => seed({ force: true }))
 
   // 2) 发起人 A 下单并支付，拿到邀请码
   __testOpenid = 'A'
@@ -1142,7 +1156,7 @@ async function edgeTest() {
 
   await cleanupE2E()
   __testOpenid = 'staff'
-  await seed()
+  await seed({ force: true })
 
   // 1) 支付回调幂等：同一订单重复 mockPay，第二次应被 CAS 拒绝
   __testOpenid = 'A'
@@ -1256,7 +1270,7 @@ exports.main = async (event) => {
       case 'whoAmI': return await whoAmI()
       case 'getProfile': return await getProfile()
       case 'saveProfile': return await saveProfile(e)
-      case 'seed': return await seed()
+      case 'seed': return await seed(e)
       case 'getActivity': return await getActivity()
       case 'getPosterRaw': return await getPosterRaw()
       case 'adminGetConfig': return await adminGetConfig()
