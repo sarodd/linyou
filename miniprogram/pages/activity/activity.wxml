@@ -7,15 +7,16 @@
 
   <view class="card">
     <view class="section-title">选择提货门店</view>
-    <picker mode="selector" range="{{stores}}" range-key="name" value="{{storeIndex}}" bindchange="onStoreChange">
+    <picker wx:if="{{stores.length}}" mode="selector" range="{{stores}}" range-key="name" value="{{storeIndex}}" bindchange="onStoreChange">
       <view class="picker">
         <view>
           <view class="picker-name">{{stores[storeIndex].name}}</view>
-          <view class="picker-addr">{{stores[storeIndex].address}} · {{stores[storeIndex].hours}}</view>
+          <view class="picker-addr">{{stores[storeIndex].address || '暂无地址'}} · {{stores[storeIndex].hours || '--'}}</view>
         </view>
         <view class="arrow">›</view>
       </view>
     </picker>
+    <view wx:elif="{{activity}}" class="hint">暂无可下单门店</view>
   </view>
 
   <view class="card">

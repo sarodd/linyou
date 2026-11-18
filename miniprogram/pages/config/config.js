@@ -145,17 +145,57 @@ Page({
     const key = e.currentTarget.dataset.key
     this.setData({ ['storeEdit.' + key]: e.detail.value })
   },
+  chooseStoreLocation() {
+    const store = this.data.storeEdit
+    if (!store || this.data.saving) return
+    const center = store.mapAddress ? { latitude: store.latitude, longitude: store.longitude } : {}
+    wx.chooseLocation({
+      ...center,
+      success: ({ name, address, latitude, longitude }) => {
+        const mapAddress = (address || name || '').trim()
+        if (!mapAddress || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+          this.showToast('请选择有地址的地图地点')
+          return
+        }
+        const patch = {
+          'storeEdit.locationName': (name || '').trim(),
+          'storeEdit.mapAddress': mapAddress,
+          'storeEdit.latitude': latitude,
+          'storeEdit.longitude': longitude
+        }
+        // 门店名称还没填时，自动带入地图搜索到的地点名，省掉用户手动再输一遍
+        if (!String(store.name || '').trim() && String(name || '').trim()) {
+          patch['storeEdit.name'] = String(name).trim()
+        }
+        this.setData(patch)
+      },
+      fail: ({ errMsg }) => {
+        if (/cancel/i.test(errMsg)) return
+        this.showToast('无法打开地图，请检查位置权限')
+      }
+    })
+  },
   cancelStoreEdit() { this.setData({ storeEdit: null }) },
   async saveStore() {
     const s = this.data.storeEdit
-    if (!s || !s.name) { this.showToast('门店名称必填'); return }
+    if (this.data.saving) return
+    if (!s || !s.name.trim()) { this.showToast('门店名称必填'); return }
+    if (!s._id && !s.mapAddress) { this.showToast('请先搜索并选择门店位置'); return }
+    const location = s.mapAddress ? {
+      locationName: s.locationName,
+      mapAddress: s.mapAddress,
+      addressDetail: s.addressDetail || '',
+      latitude: s.latitude,
+      longitude: s.longitude
+    } : {}
     this.setData({ saving: true })
     const res = await api.adminSaveStore({
-      id: s._id, name: s.name, address: s.address, hours: s.hours,
-      phone: s.phone, stock: Number(s.stock || 0)
+      id: s._id, name: s.name.trim(), hours: s.hours,
+      phone: s.phone, stock: Number(s.stock || 0), ...location
     })
     this.setData({ saving: false })
     if (res.ok) { this.bumpVersion(); this.showToast('门店已保存'); this.setData({ storeEdit: null }); await this.load() }
+    else if (res.code === 'BAD_STORE_LOCATION') this.showToast('请重新搜索并选择门店位置')
     else this.showToast('保存失败：' + (res.code || '未知错误'))
   },
   async deleteStore(e) {

@@ -354,7 +354,7 @@ async function ensureCollections() {
   }
 }
 
-async function seed(event) {
+async function seed(event, stores = []) {
   await ensureCollections()
   const activityId = 'act_linyou_v1'
   // 防覆盖：默认只在活动不存在时初始化演示数据。
@@ -388,12 +388,6 @@ async function seed(event) {
   }
   await upsert(C.ACTIVITY, activityId, activity)
 
-  // 洗发水主题 mock 门店（品牌：邻友购）
-  const stores = [
-    { _id: 'store_sh_01', name: '邻友购·上海南京西路店', address: '上海市静安区南京西路 1266 号 恒隆广场 B1', hours: '10:00-22:00', phone: '021-62888801', stock: 50 },
-    { _id: 'store_sh_02', name: '邻友购·上海徐家汇店', address: '上海市徐汇区肇嘉浜路 1000 号 美罗城 2F', hours: '10:00-22:00', phone: '021-64288802', stock: 30 },
-    { _id: 'store_bj_01', name: '邻友购·北京国贸店', address: '北京市朝阳区建国门外大街 1 号 国贸商城 B1', hours: '10:00-22:00', phone: '010-65058803', stock: 40 }
-  ]
   for (const s of stores) await upsert(C.STORE, s._id, s)
 
   // 演示店员：覆盖 CLI(openid)、HTTP 预览(preview)、e2e(staff) 三种身份，保证任何入口都能核销/取消
@@ -622,7 +616,24 @@ async function adminSaveStore(event) {
     return { ok: false, code: 'BAD_STOCK' }
   }
   const old = await db.collection(C.STORE).doc(id).get().catch(() => null)
-  if (old && old.data) {
+  const existing = old && old.data
+  const hasLocation = ['locationName', 'mapAddress', 'addressDetail', 'latitude', 'longitude']
+    .some(field => event[field] !== undefined)
+  if (hasLocation) {
+    const { latitude, longitude } = event
+    const mapAddress = typeof event.mapAddress === 'string' ? event.mapAddress.trim() : ''
+    if (!mapAddress || !Number.isFinite(latitude) || Math.abs(latitude) > 90 ||
+        !Number.isFinite(longitude) || Math.abs(longitude) > 180) {
+      return { ok: false, code: 'BAD_STORE_LOCATION' }
+    }
+    const locationName = typeof event.locationName === 'string' ? event.locationName.trim() : ''
+    const addressDetail = typeof event.addressDetail === 'string' ? event.addressDetail.trim() : ''
+    const address = [mapAddress, addressDetail].filter(Boolean).join(' ')
+    Object.assign(patch, { locationName, mapAddress, addressDetail, address, latitude, longitude })
+  } else if (!existing || (event.address !== undefined && event.address !== existing.address)) {
+    return { ok: false, code: 'BAD_STORE_LOCATION' }
+  }
+  if (existing) {
     await db.collection(C.STORE).doc(id).update({ data: patch })
   } else {
     await db.collection(C.STORE).add({ data: Object.assign({ _id: id, createdAt: now() }, patch) })
@@ -1053,6 +1064,11 @@ async function ledger() {
 // ---------- 端到端自检 ----------
 // 在单个云函数进程内，用不同 _testOpenid 模拟多用户，跑完整条真实数据链路。
 // 仅用于联调验证（读写真实云数据库），小程序正常业务不调用此 action。
+const testStores = [
+  { _id: 'test_store_01', name: '自检门店一', stock: 50 },
+  { _id: 'test_store_02', name: '自检门店二', stock: 30 }
+]
+
 async function cleanupE2E() {
   const colls = [C.ORDER, C.INVITATION, C.INVITE_RECORD, C.COMMISSION, C.LEDGER, C.STAFF, C.OPLOG]
   for (const c of colls) {
@@ -1081,18 +1097,18 @@ async function e2eTest() {
 
   // 1) 初始化（店员身份）
   __testOpenid = 'staff'
-  await run('初始化活动/门店/店员', () => seed({ force: true }))
+  await run('初始化活动/门店/店员', () => seed({ force: true }, testStores))
 
   // 2) 发起人 A 下单并支付，拿到邀请码
   __testOpenid = 'A'
-  const orderA = await run('A 下单', () => createOrder({ storeId: 'store_sh_01' }))
+  const orderA = await run('A 下单', () => createOrder({ storeId: testStores[0]._id }))
   const payA = await run('A 支付成功', () => mockPay({ orderId: orderA && orderA.order._id }))
   const inviteCode = payA && payA.code
 
   // 3) 三位受邀人通过邀请码下单并支付 -> 达标
   for (const u of ['B', 'C', 'D']) {
     __testOpenid = u
-    const o = await run(u + ' 用邀请码下单', () => createOrder({ storeId: 'store_sh_01', inviteCode }))
+    const o = await run(u + ' 用邀请码下单', () => createOrder({ storeId: testStores[0]._id, inviteCode }))
     await run(u + ' 支付成功（累计有效邀请）', () => mockPay({ orderId: o && o.order._id }))
   }
 
@@ -1111,7 +1127,7 @@ async function e2eTest() {
 
   // 7) 门店取消场景：E 下单支付后由店员取消
   __testOpenid = 'E'
-  const orderE = await run('E 下单', () => createOrder({ storeId: 'store_sh_02' }))
+  const orderE = await run('E 下单', () => createOrder({ storeId: testStores[1]._id }))
   await run('E 支付成功', () => mockPay({ orderId: orderE && orderE.order._id }))
   __testOpenid = 'staff'
   await run('店员取消 E 订单（未达标，全额可退）', () => staffCancel({ orderId: orderE && orderE.order._id }))
@@ -1156,11 +1172,11 @@ async function edgeTest() {
 
   await cleanupE2E()
   __testOpenid = 'staff'
-  await seed({ force: true })
+  await seed({ force: true }, testStores)
 
   // 1) 支付回调幂等：同一订单重复 mockPay，第二次应被 CAS 拒绝
   __testOpenid = 'A'
-  const oA = await createOrder({ storeId: 'store_sh_01' })
+  const oA = await createOrder({ storeId: testStores[0]._id })
   await mockPay({ orderId: oA.order._id })
   const pay2 = await mockPay({ orderId: oA.order._id })
   assert('支付回调重复 -> PAY_ALREADY_PROCESSED', pay2.ok === false && pay2.code === 'PAY_ALREADY_PROCESSED', pay2)
@@ -1170,19 +1186,19 @@ async function edgeTest() {
 
   // 2) 自邀拒绝：A 用自己的邀请码再下单（先让 A 的订单状态允许——用另一身份验证自邀逻辑）
   __testOpenid = 'A2'
-  const selfTry = await createOrder({ storeId: 'store_sh_01', inviteCode: '__self__' })
+  const selfTry = await createOrder({ storeId: testStores[0]._id, inviteCode: '__self__' })
   assert('无效邀请码 -> INVALID_INVITE_CODE', selfTry.ok === false && selfTry.code === 'INVALID_INVITE_CODE', selfTry)
 
   // 3) 三位受邀人达标，其中 B 尝试重复归因（两次支付不同订单归因同一邀请人 -> 只算一次）
   for (const u of ['B', 'C', 'D']) {
     __testOpenid = u
-    const o = await createOrder({ storeId: 'store_sh_01', inviteCode })
+    const o = await createOrder({ storeId: testStores[0]._id, inviteCode })
     await mockPay({ orderId: o.order._id })
   }
   // 用 D 的账号再下一单归因同一邀请人验证去重（先撤掉其已支付单以便再下单）
   await db.collection(C.ORDER).where({ buyer: 'test_D', activityId: 'act_linyou_v1' }).remove()
   __testOpenid = 'D'
-  const oD2 = await createOrder({ storeId: 'store_sh_01', inviteCode })
+  const oD2 = await createOrder({ storeId: testStores[0]._id, inviteCode })
   await mockPay({ orderId: oD2.order._id })
   const invCheck = (await db.collection(C.INVITATION).where({ code: inviteCode }).get()).data[0]
   assert('同一受邀账号重复归因 -> 去重(validCount保持3)', invCheck.validCount === 3, { validCount: invCheck.validCount })
@@ -1197,14 +1213,14 @@ async function edgeTest() {
 
   // 5) 错门店核销：店员不属于订单门店 -> WRONG_STORE
   __testOpenid = 'staff'
-  // 造一个只有 store_sh_01 权限的店员账号
+  // 创建一个只能核销自检门店一的店员。
   await db.collection(C.STAFF).add({ data: {
-    _id: 'staff_limited', openid: 'test_staff_limited', name: '限店员', storeIds: ['store_sh_01'], createdAt: Date.now()
+    _id: 'staff_limited', openid: 'test_staff_limited', name: '限店员', storeIds: [testStores[0]._id], createdAt: Date.now()
   } })
   __testOpenid = 'staff_limited'
-  // 用徐家汇店(store_sh_02)的订单尝试核销
+  // 尝试核销自检门店二的订单。
   __testOpenid = 'E'
-  const oE = await createOrder({ storeId: 'store_sh_02' })
+  const oE = await createOrder({ storeId: testStores[1]._id })
   await mockPay({ orderId: oE.order._id })
   const vcE = await genVerifyCode({ orderId: oE.order._id })
   __testOpenid = 'staff_limited'

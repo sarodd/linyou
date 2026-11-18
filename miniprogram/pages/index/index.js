@@ -62,6 +62,31 @@ Page({
   previewPoster() {
     wx.previewImage({ urls: [this.data.activity.posterSrc || '/images/poster.jpg'] })
   },
+  // 点门店地址：有经纬度就调起微信内置地图（可直接导航），没有就复制地址兜底
+  openStoreMap(e) {
+    const d = e.currentTarget.dataset || {}
+    const lat = Number(d.lat)
+    const lng = Number(d.lng)
+    const address = d.address || ''
+    if (Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0) {
+      wx.openLocation({
+        latitude: lat,
+        longitude: lng,
+        name: d.name || '',
+        address: address,
+        scale: 18
+      })
+      return
+    }
+    if (address) {
+      wx.setClipboardData({
+        data: address,
+        success: () => wx.showToast({ title: '该门店未设地图位置，已复制地址', icon: 'none' })
+      })
+      return
+    }
+    wx.showToast({ title: '该门店还没有地址', icon: 'none' })
+  },
   goActivity() {
     wx.navigateTo({ url: '/pages/activity/activity' })
   },

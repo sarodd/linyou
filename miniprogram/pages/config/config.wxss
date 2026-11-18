@@ -15,6 +15,10 @@
 .label { font-size: 26rpx; color: #666; margin-bottom: 12rpx; }
 .req { color: #e64340; }
 .input { width: 100%; box-sizing: border-box; background: #F7F8FA; border-radius: 12rpx; height: 88rpx; padding: 0 24rpx; font-size: 28rpx; color: #222; }
+.location-picker { display: flex; align-items: center; justify-content: space-between; min-height: 88rpx; padding: 16rpx 24rpx; background: #F7F8FA; border-radius: 12rpx; font-size: 28rpx; line-height: 1.4; text-align: left; color: #222; }
+.location-picker::after { border: 0; }
+.location-copy { flex: 1; min-width: 0; }
+.location-action { flex-shrink: 0; margin-left: 20rpx; color: #087B40; font-size: 26rpx; }
 
 /* 截止时间选择器 */
 .label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12rpx; }
@@ -25,6 +29,7 @@
 .picker-input { width: 100%; box-sizing: border-box; background: #F7F8FA; border-radius: 12rpx; height: 88rpx; padding: 0 24rpx; font-size: 28rpx; color: #222; display: flex; align-items: center; }
 .picker-input.ph { color: #b2b7bf; }
 .tip-inline { font-size: 24rpx; color: #999; margin-top: 8rpx; }
+.warn-inline { font-size: 22rpx; color: #ff8c00; }
 .save-btn { background: #07C160; color: #fff; font-size: 30rpx; border-radius: 14rpx; margin: 24rpx; font-weight: 600; }
 .save-btn.small { display: inline-block; width: 45%; margin: 0; }
 .cancel-btn { background: #fff; color: #666; font-size: 30rpx; border-radius: 14rpx; margin: 12rpx 24rpx; border: 1rpx solid #ddd; }

@@ -119,7 +119,7 @@
         <view class="store-main">
           <view class="store-name">{{item.name}}</view>
           <view class="store-meta">{{item.address || '暂无地址'}}</view>
-          <view class="store-meta">{{item.hours || '--'}} · {{item.phone || '--'}} · 库存 {{item.stock}}</view>
+          <view class="store-meta">{{item.hours || '--'}} · {{item.phone || '--'}} · 库存 {{item.stock}}<text wx:if="{{item.stock <= 0}}" class="warn-inline">（库存 0，不显示在活动页）</text></view>
         </view>
         <view class="store-ops">
           <text class="op" bindtap="editStore" data-store="{{item}}">编辑</text>
@@ -136,8 +136,20 @@
         <input class="input" value="{{storeEdit.name}}" bindinput="onStoreField" data-key="name" placeholder="邻友购·XX店" />
       </view>
       <view class="field">
-        <view class="label">地址</view>
-        <input class="input" value="{{storeEdit.address}}" bindinput="onStoreField" data-key="address" placeholder="门店地址" />
+        <view class="label">门店位置 <text class="req" wx:if="{{!storeEdit._id}}">*</text></view>
+        <button class="location-picker" bindtap="chooseStoreLocation" disabled="{{saving}}">
+          <view class="location-copy">
+            <view>{{storeEdit.locationName || (storeEdit.mapAddress ? '已选位置' : '搜索地点或地址')}}</view>
+            <view wx:if="{{storeEdit.mapAddress}}" class="store-meta">{{storeEdit.mapAddress}}</view>
+          </view>
+          <text class="location-action">{{storeEdit.mapAddress ? '重选' : '选择'}} ›</text>
+        </button>
+        <view wx:if="{{!storeEdit.mapAddress && storeEdit.address}}" class="tip-inline">原地址 {{storeEdit.address}}</view>
+        <view wx:if="{{storeEdit.mapAddress}}" class="tip-inline">已获取经纬度，活动页可直接点地址调起地图导航</view>
+      </view>
+      <view wx:if="{{storeEdit.mapAddress}}" class="field">
+        <view class="label">详细地址（选填）</view>
+        <input class="input" value="{{storeEdit.addressDetail}}" bindinput="onStoreField" data-key="addressDetail" placeholder="楼层、门牌号或取货点" />
       </view>
       <view class="field-row">
         <view class="field half">

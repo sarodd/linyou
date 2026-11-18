@@ -28,9 +28,13 @@
 .deadline { font-size: 23rpx; color: #999; margin-top: 18rpx; padding-top: 18rpx; border-top: 1rpx solid #f0f0f0; }
 .store { padding: 18rpx 0; border-bottom: 1rpx solid #f2f2f2; }
 .store:last-child { border-bottom: none; }
-.store-name { font-size: 28rpx; font-weight: 500; color: #333; }
+.store-head { display: flex; align-items: center; justify-content: space-between; }
+.store-name { font-size: 28rpx; font-weight: 500; color: #333; flex: 1; }
+.store-nav { flex: none; font-size: 22rpx; color: #137a4a; background: #e6f5ec; padding: 4rpx 14rpx; border-radius: 20rpx; }
 .store-meta { font-size: 24rpx; color: #888; margin-top: 6rpx; }
+.store-poi { font-size: 22rpx; color: #7a9c8b; margin-top: 6rpx; }
 .store-stock { font-size: 22rpx; color: #137a4a; margin-top: 6rpx; }
+.store-empty { text-align: center; font-size: 24rpx; color: #bbb; padding: 40rpx 20rpx; line-height: 1.7; }
 .notice { font-size: 22rpx; color: #aaa; text-align: center; margin: 30rpx 40rpx; }
 /* 首页是 tab 页，吸底按钮必须抬到自定义 tabBar（100rpx + 安全区）之上，否则会被盖住 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: calc(100rpx + env(safe-area-inset-bottom)); background: #fff; padding: 16rpx 24rpx; box-shadow: 0 -2rpx 12rpx rgba(0,0,0,.05); z-index: 100; }

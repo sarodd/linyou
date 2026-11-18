@@ -41,11 +41,18 @@
 
     <view class="card">
       <view class="card-title">参与门店（{{stores.length}}）</view>
-      <view class="store" wx:for="{{stores}}" wx:key="_id">
-        <view class="store-name">{{item.name}}</view>
-        <view class="store-meta">{{item.address}} · {{item.hours}}</view>
+      <view class="store" wx:for="{{stores}}" wx:key="_id" bindtap="openStoreMap"
+            data-lat="{{item.latitude}}" data-lng="{{item.longitude}}"
+            data-name="{{item.name}}" data-address="{{item.address}}">
+        <view class="store-head">
+          <view class="store-name">{{item.name}}</view>
+          <text class="store-nav">{{item.latitude ? '导航 ›' : '复制地址'}}</text>
+        </view>
+        <view class="store-meta">{{item.address || '暂无地址'}} · {{item.hours || '--'}}</view>
+        <view wx:if="{{item.locationName && item.locationName !== item.name}}" class="store-poi">地图选点：{{item.locationName}}</view>
         <view class="store-stock">库存 {{item.stock}}</view>
       </view>
+      <view wx:if="{{stores.length === 0}}" class="store-empty">暂无参与门店，请在「运营 → 活动门店」添加并设置库存</view>
     </view>
 
     <view class="notice">预览版说明：支付与退款为模拟流程，不涉及真实资金</view>
