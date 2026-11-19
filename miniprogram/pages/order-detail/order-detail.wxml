@@ -9,9 +9,16 @@
 
     <view class="card" wx:if="{{order.status === 'paid'}}">
       <view class="section-title">核销码</view>
-      <view wx:if="{{!verifyCode}}" class="code-placeholder" bindtap="genCode">点击生成核销码（5分钟有效）</view>
-      <view wx:if="{{verifyCode}}" class="verify-code">{{verifyCode}}</view>
-      <view class="hint">到店后向店员出示此码核销，核销只可成功一次</view>
+      <view wx:if="{{!verifyCode}}" class="code-placeholder" bindtap="genCode">点击生成核销码（5 分钟有效）</view>
+      <view wx:if="{{verifyCode}}" class="qr-box">
+        <canvas type="2d" id="qrCanvas" class="qr-canvas"></canvas>
+        <view class="verify-code">{{verifyCode}}</view>
+        <view class="qr-meta">
+          <text class="qr-expire">{{countdownText}}</text>
+          <text class="qr-refresh" bindtap="genCode">刷新</text>
+        </view>
+      </view>
+      <view class="hint">到店后向店员出示此二维码，店员扫码核销；核销只可成功一次</view>
     </view>
 
     <view class="card">

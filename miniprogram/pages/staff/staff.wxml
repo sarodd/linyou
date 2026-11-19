@@ -15,6 +15,15 @@
 
   <block wx:if="{{!loading && !notStaff}}">
     <view class="header">店员工作台</view>
+
+    <view class="scan-card">
+      <view class="btn-scan {{scanning ? 'btn-scan-busy' : ''}}" bindtap="scanVerify">
+        {{scanning ? '正在打开相机…' : '扫码核销'}}
+      </view>
+      <view class="scan-tip">对准顾客订单页的核销二维码，扫码后自动核销</view>
+    </view>
+
+    <view class="list-title">待处理订单</view>
     <view wx:if="{{orders.length === 0}}" class="empty-inline">暂无待处理订单</view>
     <view class="order" wx:for="{{orders}}" wx:key="_id">
       <view class="order-head">
@@ -25,7 +34,7 @@
       <view class="info">{{item.storeName}}</view>
       <view class="info">实付 ¥ {{item.amountYuan}} · 活动佣金 ¥ {{item.amountYuan}}</view>
       <view class="actions" wx:if="{{item.status === 'paid'}}">
-        <view class="btn-verify" bindtap="verify" data-id="{{item._id}}">扫码核销</view>
+        <view class="btn-verify" bindtap="manualVerify" data-id="{{item._id}}">手动输码</view>
         <view class="btn-cancel" bindtap="cancel" data-id="{{item._id}}">受理取消</view>
       </view>
     </view>

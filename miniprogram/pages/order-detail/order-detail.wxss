@@ -6,7 +6,12 @@
 .card { background:#fff; margin:20rpx 24rpx 0; border-radius:16rpx; padding:30rpx; }
 .section-title { font-size:28rpx; font-weight:600; color:#333; margin-bottom:22rpx; }
 .code-placeholder { text-align:center; background:#f0faf4; color:#07C160; padding:36rpx; border-radius:12rpx; font-size:28rpx; border:2rpx dashed #07C160; }
-.verify-code { text-align:center; font-size:72rpx; font-weight:700; letter-spacing:12rpx; color:#07C160; padding:30rpx; background:#f0faf4; border-radius:12rpx; }
+.verify-code { text-align:center; font-size:52rpx; font-weight:700; letter-spacing:10rpx; color:#07C160; padding:18rpx 0 8rpx; }
+.qr-box { display:flex; flex-direction:column; align-items:center; background:#f0faf4; border-radius:12rpx; padding:28rpx 0 20rpx; }
+.qr-canvas { width:220px; height:220px; background:#fff; border-radius:8rpx; }
+.qr-meta { display:flex; align-items:center; gap:24rpx; margin-top:14rpx; }
+.qr-expire { font-size:23rpx; color:#8a8f99; }
+.qr-refresh { font-size:24rpx; color:#07C160; padding:4rpx 20rpx; border:2rpx solid #07C160; border-radius:24rpx; }
 .hint { font-size:22rpx; color:#aaa; margin-top:16rpx; }
 .row { display:flex; justify-content:space-between; font-size:27rpx; color:#555; padding:14rpx 0; }
 .row text:last-child { color:#333; }
