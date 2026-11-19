@@ -9,7 +9,8 @@
     "pages/staff/staff",
     "pages/admin/admin",
     "pages/mine/mine",
-    "pages/config/config"
+    "pages/config/config",
+    "pages/legal/legal"
   ],
   "window": {
     "backgroundColor": "#F6F7F9",
@@ -37,6 +38,7 @@
     }
   },
   "requiredPrivateInfos": ["chooseLocation"],
+  "__usePrivacyCheck__": true,
   "sitemapLocation": "sitemap.json",
   "style": "v2",
   "lazyCodeLoading": "requiredComponents"

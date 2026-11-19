@@ -12,6 +12,9 @@
 const cloud = require('wx-server-sdk')
 const crypto = require('crypto')
 const https = require('https')
+// 说明：曾尝试换成 @cloudbase/node-sdk v4 瘦身，但其 API 与 wx-server-sdk 不兼容
+// （doc().get().data 变数组、update() 返回 {updated} 而非 {stats:{updated}}、写入不再包 {data}），
+// 全量迁移风险高于收益，故继续使用 wx-server-sdk，瘦身改走「剔除类型包」的方式。
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 
 const db = cloud.database()
@@ -90,6 +93,106 @@ function httpsGetJson(url) {
     req.on('error', reject)
     req.setTimeout(8000, () => req.destroy(new Error('微信接口请求超时')))
   })
+}
+
+// 通用 POST：body 支持字符串（JSON）或 Buffer（multipart 图片）
+function httpsPost(url, body, headers) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body || ''), 'utf8')
+    const u = new URL(url)
+    const req = https.request({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: Object.assign({ 'Content-Length': payload.length }, headers || {})
+    }, (res) => {
+      let raw = ''
+      res.on('data', (c) => { raw += c })
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)) } catch (e) { reject(new Error('微信接口返回非 JSON')) }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(8000, () => req.destroy(new Error('微信接口请求超时')))
+    req.write(payload)
+    req.end()
+  })
+}
+
+// ---------- 微信内容安全（需小程序已认证；未配置 AppSecret 时自动跳过） ----------
+// access_token 缓存在实例内存里：云函数实例复用期间有效，冷启动重取一次即可，
+// 不落库也就不会多出一个集合。
+let __tokenCache = { value: '', expireAt: 0 }
+
+async function getAccessToken() {
+  if (__tokenCache.value && Date.now() < __tokenCache.expireAt) return __tokenCache.value
+  if (!WX_APPID || !WX_APPSECRET) return ''
+  const r = await httpsGetJson('https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential'
+    + '&appid=' + encodeURIComponent(WX_APPID) + '&secret=' + encodeURIComponent(WX_APPSECRET))
+  if (!r || !r.access_token) {
+    await log('sec_token_fail', { errcode: r && r.errcode, errmsg: r && r.errmsg })
+    return ''
+  }
+  // 提前 5 分钟过期，避免边界上用到失效 token
+  __tokenCache = { value: r.access_token, expireAt: Date.now() + Math.max(60, (r.expires_in || 7200) - 300) * 1000 }
+  return r.access_token
+}
+
+// 返回 'pass' | 'risky' | 'skip'（skip = 未配置密钥/接口异常，按放行处理但记审计）
+async function secCheckText(content, oid) {
+  const text = String(content || '').trim()
+  if (!text) return 'pass'
+  const token = await getAccessToken()
+  if (!token) return 'skip'
+  try {
+    const r = await httpsPost(
+      'https://api.weixin.qq.com/wxa/msg_sec_check?access_token=' + encodeURIComponent(token),
+      JSON.stringify({ content: text, version: 2, scene: 2, openid: oid }),
+      { 'Content-Type': 'application/json' }
+    )
+    if (r && r.errcode === 87014) return 'risky'
+    if (r && r.errcode) {
+      await log('sec_text_fail', { errcode: r.errcode, errmsg: r.errmsg })
+      return 'skip'
+    }
+    const suggest = r && r.result && r.result.suggest
+    if (suggest === 'risky') return 'risky'
+    if (suggest === 'review') await log('sec_text_review', { label: r.result.label })
+    return 'pass'
+  } catch (err) {
+    await log('sec_text_error', { message: (err && err.message) || 'unknown' })
+    return 'skip'
+  }
+}
+
+async function secCheckImage(dataUrl, oid) {
+  const m = /^data:image\/(jpeg|jpg|png);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''))
+  if (!m) return 'skip' // webp 等格式 img_sec_check 不收，交给存储侧白名单限制
+  const token = await getAccessToken()
+  if (!token) return 'skip'
+  const buf = Buffer.from(m[2], 'base64')
+  if (buf.length > 1024 * 1024) return 'risky' // 超过接口上限说明前端未按约定压缩
+  const boundary = '----ly' + crypto.randomBytes(8).toString('hex')
+  const head = Buffer.from('--' + boundary + '\r\n'
+    + 'Content-Disposition: form-data; name="media"; filename="avatar.' + (m[1] === 'png' ? 'png' : 'jpg') + '"\r\n'
+    + 'Content-Type: image/' + (m[1] === 'png' ? 'png' : 'jpeg') + '\r\n\r\n', 'utf8')
+  const tail = Buffer.from('\r\n--' + boundary + '--\r\n', 'utf8')
+  try {
+    const r = await httpsPost(
+      'https://api.weixin.qq.com/wxa/img_sec_check?access_token=' + encodeURIComponent(token),
+      Buffer.concat([head, buf, tail]),
+      { 'Content-Type': 'multipart/form-data; boundary=' + boundary }
+    )
+    if (r && r.errcode === 87014) return 'risky'
+    if (r && r.errcode) {
+      await log('sec_img_fail', { errcode: r.errcode, errmsg: r.errmsg, openid: oid })
+      return 'skip'
+    }
+    return 'pass'
+  } catch (err) {
+    await log('sec_img_error', { message: (err && err.message) || 'unknown' })
+    return 'skip'
+  }
 }
 
 // 解析本次请求的身份（async，token 会话需查库）
@@ -314,7 +417,8 @@ async function saveProfile(event) {
   if (event.avatar !== undefined) {
     const av = String(event.avatar || '')
     if (av) {
-      if (!/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(av)) {
+      // 只收 jpeg/png：img_sec_check 不支持 webp，放开 webp 等于留一条绕过内容安全的通道
+      if (!/^data:image\/(jpeg|jpg|png);base64,[A-Za-z0-9+/=]+$/.test(av)) {
         return { ok: false, code: 'BAD_AVATAR', message: '头像格式不支持，请重新选择' }
       }
       if (av.length > AVATAR_MAX_CHARS) {
@@ -325,6 +429,16 @@ async function saveProfile(event) {
     touched = true
   }
   if (!touched) return { ok: false, code: 'NOTHING_TO_SAVE', message: '没有需要保存的内容' }
+
+  // 昵称与头像是用户自填内容（UGC），写入前过微信内容安全
+  if (patch.nickname) {
+    const s = await secCheckText(patch.nickname, oid)
+    if (s === 'risky') return { ok: false, code: 'NICK_RISKY', message: '昵称含有违规内容，请换一个' }
+  }
+  if (patch.avatar) {
+    const s = await secCheckImage(patch.avatar, oid)
+    if (s === 'risky') return { ok: false, code: 'AVATAR_RISKY', message: '头像未通过内容安全检测，请更换' }
+  }
 
   await ensureCollection(C.PROFILE)
   try {
@@ -338,6 +452,78 @@ async function saveProfile(event) {
   }
   await log('saveProfile', { hasNickname: !!patch.nickname, hasAvatar: !!patch.avatar })
   return await getProfile()
+}
+
+// ---------- 注销账号 ----------
+// 规则：交易链路未了结时不允许注销；管理员必须先被移除权限（否则会把自己锁在门外）。
+// 注销动作：删资料、删登录态、解绑店员、作废邀请码、订单买家标识去标识化。
+// 订单本身（金额/商品/门店/时间）按《电子商务法》要求留存，不做物理删除。
+async function deleteAccount() {
+  const oid = openid()
+  if (!oid || oid === 'anonymous') return { ok: false, code: 'NO_LOGIN' }
+  if (__identity.isTest) return { ok: false, code: 'TEST_IDENTITY', message: '预览身份不可注销' }
+  // 管理员（含已在白名单里但被停用的）不允许自助注销，否则容易把自己锁在门外
+  const adminDoc = await db.collection(C.ADMIN).where({ openid: oid }).count()
+    .catch(() => ({ total: 0 }))
+  if (__role === 'admin' || adminDoc.total > 0 || ADMIN_OPENIDS.includes(oid)) {
+    return {
+      ok: false, code: 'ADMIN_CANNOT_DELETE',
+      message: '当前账号是管理员，请先由其他管理员在「运营 → 成员管理」中移除权限，再回来注销'
+    }
+  }
+
+  const [openOrderCnt, invCnt, cmCnt] = await Promise.all([
+    db.collection(C.ORDER).where({
+      buyer: oid, status: _.in(['pending_pay', 'paid', 'cancel_processing'])
+    }).count(),
+    db.collection(C.INVITATION).where({ buyer: oid, status: _.in(['accumulating', 'locked']) }).count(),
+    db.collection(C.COMMISSION).where({
+      buyer: oid, status: _.in(['pending', 'processing', 'exception'])
+    }).count()
+  ])
+
+  if (openOrderCnt.total > 0) {
+    return { ok: false, code: 'HAS_OPEN_ORDER', message: '还有未完成的订单，请先到店核销或办理取消后再注销' }
+  }
+  if (invCnt.total > 0) {
+    return { ok: false, code: 'HAS_OPEN_INVITATION', message: '还有进行中的邀请活动，达标或作废后才能注销' }
+  }
+  if (cmCnt.total > 0) {
+    return { ok: false, code: 'HAS_OPEN_COMMISSION', message: '还有未结清的佣金，请等待处理完成后再注销' }
+  }
+
+  const anon = 'deleted_' + crypto.createHash('sha256').update(oid).digest('hex').slice(0, 16)
+  const errors = []
+
+  await db.collection(C.PROFILE).doc('profile_' + oid).remove()
+    .catch(err => errors.push('profile:' + (err && err.message)))
+  await db.collection(C.SESSION).where({ openid: oid }).remove()
+    .catch(err => errors.push('session:' + (err && err.message)))
+  await db.collection(C.STAFF).where({ openid: oid }).remove()
+    .catch(err => errors.push('staff:' + (err && err.message)))
+
+  // 作废邀请码：注销后别人手里的旧码不能再归因到这个（已不存在的）账号
+  const invUpd = await db.collection(C.INVITATION).where({ buyer: oid }).update({
+    data: { code: null, voidedByDelete: true, updatedAt: now() }
+  }).catch(err => { errors.push('invitation:' + (err && err.message)); return { stats: { updated: 0 } } })
+
+  // 订单去标识化：保留交易记录，断开与微信账号的关联
+  const orderUpd = await db.collection(C.ORDER).where({ buyer: oid }).update({
+    data: { buyer: anon, buyerDeletedAt: now() }
+  }).catch(err => { errors.push('order:' + (err && err.message)); return { stats: { updated: 0 } } })
+
+  await log('deleteAccount', {
+    orders: (orderUpd.stats && orderUpd.stats.updated) || 0,
+    invitations: (invUpd.stats && invUpd.stats.updated) || 0,
+    errors
+  })
+
+  return {
+    ok: true,
+    anonymizedOrders: (orderUpd.stats && orderUpd.stats.updated) || 0,
+    // profile/session 删除失败时前端仍需清本地登录态，这里如实回报
+    partial: errors.length > 0
+  }
 }
 
 async function log(action, detail) {
@@ -1651,6 +1837,7 @@ exports.main = async (event) => {
       case 'whoAmI': return await whoAmI()
       case 'getProfile': return await getProfile()
       case 'saveProfile': return await saveProfile(e)
+      case 'deleteAccount': return await deleteAccount()
       case 'seed': return await seed(e)
       case 'getActivity': return await getActivity()
       case 'getPosterRaw': return await getPosterRaw()

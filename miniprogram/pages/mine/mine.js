@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const tab = require('../../utils/tab')
+const privacy = require('../../utils/privacy')
 
 // 与云端 saveProfile 的 AVATAR_MAX_CHARS 保持一致（base64 字符数）
 // HTTP 网关请求体约 96KB，头像连同 JSON 外壳必须留足余量
@@ -25,12 +26,34 @@ Page({
     loginText: '',
     updatedText: '',
     nickMax: 20,
+    showPrivacy: false,
+    canDelete: false,
     stats: { total: 0, paid: 0, verified: 0 }
   },
 
+  // 隐私回调是全局单例，只在当前可见页注册，避免离开页面后仍被别的页面触发
   onShow() {
+    privacy.attach(this)
     tab.sync(this, tab.PATH.mine)
     this.load()
+  },
+
+  onHide() {
+    privacy.detach(this)
+  },
+
+  onUnload() {
+    privacy.detach(this)
+  },
+
+  // ---- 隐私授权 ----
+  // 头像/昵称属于隐私接口，未同意《隐私政策》时先由 privacy-popup 引导授权
+  onPrivacyAgree() {
+    privacy.agree(this)
+  },
+
+  onPrivacyReject() {
+    privacy.reject(this, '未同意隐私政策，暂时无法设置头像昵称')
   },
 
   async load() {
@@ -48,7 +71,9 @@ Page({
         isAdmin: !!p.isAdmin,
         loginText: p.loginText || '',
         nickMax: p.nickMax || 20,
-        updatedText: p.updatedAt ? api.fmtTime(p.updatedAt) : ''
+        updatedText: p.updatedAt ? api.fmtTime(p.updatedAt) : '',
+        // 只有真实微信身份可注销；预览身份、管理员（需先移除权限）不给入口
+        canDelete: !!p.openid && !p.isTest && !p.isAdmin
       })
     }
     if (o && o.ok) {
@@ -202,5 +227,48 @@ Page({
   },
   goAdmin() {
     wx.switchTab({ url: '/pages/admin/admin' })
+  },
+
+  // ---- 协议 ----
+  goPrivacy() {
+    wx.navigateTo({ url: '/pages/legal/legal?type=privacy' })
+  },
+  goTerms() {
+    wx.navigateTo({ url: '/pages/legal/legal?type=terms' })
+  },
+
+  // ---- 注销 ----
+  confirmDelete() {
+    wx.showModal({
+      title: '注销账号',
+      content: '注销后将删除你的昵称、头像与登录信息，并作废你的邀请码；订单与邀请记录依法去标识化留存。注销后不可恢复，是否继续？',
+      confirmText: '继续注销',
+      confirmColor: '#e64545',
+      success: (r) => { if (r.confirm) this.doDelete() }
+    })
+  },
+
+  async doDelete() {
+    wx.showLoading({ title: '正在注销', mask: true })
+    let res
+    try {
+      res = await api.deleteAccount()
+    } catch (e) {
+      res = { ok: false, code: 'NETWORK_ERROR' }
+    }
+    wx.hideLoading()
+    if (!res || !res.ok) {
+      wx.showModal({
+        title: '注销未完成',
+        content: (res && (res.message || res.code)) || '请稍后重试',
+        showCancel: false
+      })
+      return
+    }
+    // 服务端会话已删除，本地登录态一并清掉，避免拿着废 token 继续请求
+    api.clearLogin()
+    try { wx.removeStorageSync('ly_pending_invite') } catch (e) { /* 缓存不可用忽略 */ }
+    wx.showToast({ title: '已注销', icon: 'success' })
+    setTimeout(() => wx.reLaunch({ url: '/pages/index/index' }), 800)
   }
 })

@@ -1,0 +1,16 @@
+<view wx:if="{{show}}" class="mask" catchtouchmove="noop">
+  <view class="sheet">
+    <view class="title">隐私保护提示</view>
+    <view class="body">
+      为了正常使用<text class="strong">头像、昵称</text>等功能，我们需要收集你主动填写的头像与昵称。请阅读并同意
+      <text class="link" bindtap="openTerms">《用户协议》</text>和<text class="link" bindtap="openPrivacy">《隐私政策》</text>后继续。
+    </view>
+    <button
+      id="agree-btn"
+      class="btn-agree"
+      open-type="agreePrivacyAuthorization"
+      bindagreeprivacyauthorization="onAgree"
+    >同意并继续</button>
+    <view class="btn-reject" bindtap="onReject">暂不同意</view>
+  </view>
+</view>

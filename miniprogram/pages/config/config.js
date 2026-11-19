@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const tab = require('../../utils/tab')
+const privacy = require('../../utils/privacy')
 
 // 毫秒时间戳 -> { d: 'YYYY-MM-DD', t: 'HH:mm' }（picker 所需格式）
 const splitDeadline = (ts) => {
@@ -40,12 +41,30 @@ Page({
     // 海报
     posterCloud: false,
     posterSrc: '',
-    noAccess: false
+    noAccess: false,
+    showPrivacy: false
   },
 
   async onLoad() {
     const ok = await tab.requireAdmin(this)
     if (ok) this.load()
+  },
+  // 隐私回调是全局单例：只在当前可见页注册，离开即解绑，避免串页
+  onShow() {
+    privacy.attach(this)
+  },
+  onHide() {
+    privacy.detach(this)
+  },
+  onUnload() {
+    privacy.detach(this)
+  },
+  // 地图选点前需先同意隐私政策
+  onPrivacyAgree() {
+    privacy.agree(this)
+  },
+  onPrivacyReject() {
+    privacy.reject(this, '未同意隐私政策，无法使用地图选点')
   },
   goHome() { wx.switchTab({ url: '/pages/index/index' }) },
 

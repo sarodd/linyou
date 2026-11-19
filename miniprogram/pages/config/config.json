@@ -1,4 +1,7 @@
 {
   "navigationBarTitleText": "活动配置 · 邻友购",
-  "enablePullDownRefresh": false
+  "enablePullDownRefresh": false,
+  "usingComponents": {
+    "privacy-popup": "/components/privacy-popup/index"
+  }
 }

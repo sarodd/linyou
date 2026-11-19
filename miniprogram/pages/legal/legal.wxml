@@ -1,0 +1,29 @@
+<view class="page">
+  <view wx:if="{{notFound}}" class="empty">文档不存在</view>
+
+  <block wx:else>
+    <view class="doc-head">
+      <view class="doc-title">{{title}}</view>
+      <view class="doc-meta">生效日期 {{updatedAt}}</view>
+    </view>
+
+    <view class="doc-intro">{{intro}}</view>
+
+    <view class="section" wx:for="{{sections}}" wx:key="h">
+      <view class="section-h">{{item.h}}</view>
+      <view class="section-p" wx:for="{{item.ps}}" wx:for-item="p" wx:key="*this">{{p}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-h">八、联系我们</view>
+      <view class="section-p" wx:if="{{contact}}">
+        如对本文件有疑问或需要行使个人信息相关权利，请联系：<text class="mail" bindtap="copyContact">{{contact}}</text>（点击复制）
+      </view>
+      <view class="section-p" wx:else>
+        如对本文件有疑问或需要行使个人信息相关权利，可通过门店线下渠道联系运营方。
+      </view>
+    </view>
+
+    <view class="foot">本文件自公示之日起生效。</view>
+  </block>
+</view>

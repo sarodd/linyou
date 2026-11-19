@@ -1,0 +1,9 @@
+.mask { position:fixed; left:0; right:0; top:0; bottom:0; background:rgba(0,0,0,.45); z-index:9000; display:flex; align-items:flex-end; }
+.sheet { width:100%; background:#fff; border-radius:24rpx 24rpx 0 0; padding:44rpx 44rpx calc(28rpx + env(safe-area-inset-bottom)); box-sizing:border-box; }
+.title { font-size:32rpx; font-weight:600; color:#222; text-align:center; margin-bottom:24rpx; }
+.body { font-size:26rpx; color:#555; line-height:1.8; }
+.strong { color:#222; font-weight:600; }
+.link { color:#07C160; }
+.btn-agree { margin-top:36rpx; background:#07C160; color:#fff; font-size:30rpx; border-radius:12rpx; line-height:88rpx; height:88rpx; }
+.btn-agree::after { border:none; }
+.btn-reject { text-align:center; font-size:26rpx; color:#999; padding:26rpx 0 6rpx; }

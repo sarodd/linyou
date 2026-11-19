@@ -268,7 +268,11 @@ module.exports = {
   refreshRole: () => refreshRole(),
   // 个人资料（昵称 / 头像，仅本人可读写）
   getProfile: () => call('getProfile'),
-  saveProfile: (d) => call('saveProfile', d)
+  saveProfile: (d) => call('saveProfile', d),
+  // 注销账号：服务端删除资料/登录态/店员绑定、作废邀请码、订单去标识化
+  deleteAccount: () => call('deleteAccount'),
+  // 本地登录态清理（注销、切换账号时用）
+  clearLogin: () => clearLogin()
 }
 
 // 分 -> 元字符串

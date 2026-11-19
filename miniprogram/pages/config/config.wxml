@@ -191,4 +191,7 @@
 
   <!-- 离屏画布：用于压缩海报图片，固定定位移到屏幕外不影响布局 -->
   <canvas type="2d" id="poster-canvas" class="offscreen-canvas"></canvas>
+
+  <!-- 地图选点属于隐私接口，未同意《隐私政策》时先走授权面板 -->
+  <privacy-popup show="{{showPrivacy}}" bind:agree="onPrivacyAgree" bind:reject="onPrivacyReject" />
 </view>

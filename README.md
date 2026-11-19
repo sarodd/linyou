@@ -25,17 +25,22 @@ miniprogram/
   custom-tab-bar/            自定义 tabBar：user 显示 3 项，admin 显示 5 项
   utils/api.js               wx.login 登录态 + wx.request(HTTP) 优先 + wx.cloud 兜底 + 角色缓存
   utils/tab.js               tabBar 同步 + 管理类页面权限守卫
+  utils/privacy.js           隐私授权：注册/解绑 onNeedPrivacyAuthorization，回传同意结果
+  utils/qrcode.js            二维码编码器（vendor qrcode-generator 1.4.4, MIT）
+  utils/verify-code.js       核销凭证编解码：LY1|orderId|code
+  components/privacy-popup/  隐私授权面板（open-type="agreePrivacyAuthorization"）
   pages/
     index/                   活动首页（活动规则、门店、入口，普通用户可见）
     activity/                确认订单（选店、填邀请码、下单+模拟支付）
     orders/                  我的订单（不展示身份信息，仅在无管理员时显示自举入口）
-    order-detail/            订单详情、5分钟核销码、佣金进度
-    invite/                  邀请码/链接、有效人数进度、佣金状态
+    order-detail/            订单详情、5分钟核销二维码（canvas 现场生成）、佣金进度
+    invite/                  邀请码 + 分享卡片（open-type=share）、有效人数进度、佣金状态
     landing/                 受邀落地页（带参 code 进入）
-    staff/                   店员工作台（管理员专属，核销、受理取消）
+    staff/                   店员工作台（管理员专属，wx.scanCode 扫码核销 + 手输兜底、受理取消）
     admin/                   管理员专属：运营看板 + 退款处理 + 资金流水 + 身份卡片 + 成员管理
-    mine/                    我的：头像 / 昵称 / openid / 角色 / 订单统计（所有角色可见）
+    mine/                    我的：头像 / 昵称 / openid / 角色 / 订单统计 / 协议入口 / 注销账号
     config/                  管理员专属：活动配置页（活动/商品/门店/海报）
+    legal/                   隐私政策 & 用户协议（?type=privacy|terms）
 ```
 
 ## ✅ 预览方案：HTTP 直连 CloudBase（无需微信认证/云开发）
@@ -218,6 +223,26 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 - [ ] 微信认证 + 商户号，把 `mockPay` / `mockRefund` 换成微信支付 v3，并设 `MOCK_PAY_ENABLED=false`
 - [ ] AppSecret 定期轮换（重置后同步云端环境变量）
 - [ ] 复核自定义 tabBar 仅按 `whoAmI().role` 渲染；注意**前端隐藏入口不构成安全边界**，所有敏感接口必须保留在 `ADMIN_ACTIONS` 里
+- [ ] 在 mp 后台「设置 → 服务内容声明 → 用户隐私保护指引」填写收集项（头像、昵称、位置），否则 `__usePrivacyCheck__` 打开后头像/昵称点不动
+- [ ] 填 `pages/legal/legal.js` 顶部的 `OPERATOR.contactEmail`（隐私政策里展示的联系方式，留空则显示"通过门店线下渠道联系"）
+
+## 隐私合规、内容安全与注销（2026-11-20 新增）
+
+### 隐私三件套
+
+1. **隐私协议页面**：`pages/legal/legal?type=privacy|terms`，同一页面渲染《隐私政策》与《用户协议》，入口在「我的 → 隐私政策 / 用户协议」。文案与实现一致（收集 openid、头像昵称、订单、邀请关系；位置仅管理员选点用；存储在上海 CloudBase；交易记录依法留存三年）。
+2. **首次授权弹窗**：`components/privacy-popup` + `utils/privacy.js`。`app.json` 已开 `"__usePrivacyCheck__": true`；未同意时微信回调 `onNeedPrivacyAuthorization`，页面弹出面板，同意按钮是 `open-type="agreePrivacyAuthorization"`（必须回传 `buttonId: 'agree-btn'`）。当前挂在「我的」（头像/昵称）与「运营配置」（地图选点）两页，且只在 `onShow` 注册、`onHide` 解绑——这个回调是全局单例，离开页面不解绑会把弹窗打到别的页面上。
+3. **注销入口**：「我的 → 注销账号」。服务端 `deleteAccount` 的前置守卫：有未完成订单 / 进行中的邀请 / 未结清佣金 / 管理员身份时一律拒绝；通过后删除 `profiles`、该 openid 的全部 `sessions`、`staff` 绑定，作废其邀请码（`code=null`），并把 `orders.buyer` 改写为 `deleted_<sha256前16位>`。订单、佣金、流水本身保留（《电子商务法》要求交易记录留存），但已与微信账号断开关联。
+
+### 内容安全
+
+`saveProfile` 写入前调用微信内容安全：昵称走 `msg_sec_check`（v2，`scene=2` 社交日志），头像走 `img_sec_check`（multipart，仅收 jpeg/png——webp 接口不支持，放开等于留一条绕过通道）。命中 `87014` 或 `suggest=risky` 返回 `NICK_RISKY` / `AVATAR_RISKY`；接口本身异常（token 失效、openid 非法、网络超时）时**放行并记审计**（`sec_text_fail` / `sec_img_error`），避免微信侧抖动把全部用户挡在门外。access_token 缓存在实例内存，冷启动重取一次，不额外建集合。
+
+### 云函数瘦身
+
+`wx-server-sdk@2.6.3 → @cloudbase/node-sdk@2.9.1 → ts-node → typescript` 这条链路会拉进 TS 编译器与平台二进制（约 31MB）。`scripts/prune-deps.js` 在 `postinstall` 里剔除 `@typescript / typescript / ts-node / @types`，依赖体积 **76MB → 42MB**（原 173MB 是历史安装残留）。云函数只用 JS 运行，不需要编译器；若将来入口改 `.ts`，删掉该脚本与 `postinstall` 即可。
+
+> 曾尝试整体换到 `@cloudbase/node-sdk@4`（45MB），实测 v4 与 wx-server-sdk **不兼容**：`doc().get().data` 变数组、`update()` 返回 `{updated}` 而不是 `{stats:{updated}}`、写入不再包 `{data}`。CAS 逻辑依赖 `stats.updated`，全量迁移风险高于收益，故保留 wx-server-sdk。
 
 ## 运营配置入口（活动 / 商品 / 门店 / 海报）
 
@@ -278,10 +303,15 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 
 0. 首页顶部为活动海报（点击放大），下方是商品卡、活动规则与参与门店
 1. 首页「立即参与」→ 选门店下单 → 自动模拟支付 → 进入邀请页拿到邀请码
-2. 把邀请码发给另一个微信号（真实登录后即为不同账号），从落地页 `?code=邀请码` 进入下单支付 → 计为 1 个有效邀请
+2. 进入邀请页 → 点「分享给好友，一起拼单」发分享卡片（或复制邀请文案）。好友点卡片进入落地页，邀请码自动带入并暂存本地；无论好友从落地页下单、还是跳回首页再自己下单，邀请码都会自动填充 → 计为 1 个有效邀请
 3. 集齐 N 人 → 邀请状态变「已达标」，自动生成佣金发放单（金额取下单时的价格快照）
 4. 「运营」tab → **退款处理** → 核对金额后点「标记已退款」（未接支付前登记线下转账）→ 佣金「已到账」，资金流水记一笔
-5. 店员工作台 → 核销 / 受理未核销取消；取消会自动作废该单的邀请资格并回退未出款的佣金
+5. 店员工作台 → 「扫码核销」调起相机扫顾客订单页的二维码（相机不可用时可「手动输码」）/ 受理未核销取消；取消会自动作废该单的邀请资格并回退未出款的佣金
+6. 「运营」tab 看达标率、核销率；资金流水 tab 看佣金与取消两类流水
+
+### 扫码核销链路
+
+顾客端 `genVerifyCode` 拿到 5 分钟有效的 6 位码 → 本地用 `utils/qrcode.js`（qrcode-generator，MIT）在 canvas 2d 上现场绘制二维码，内容为 `LY1|<orderId>|<code>`，无需上传图片、不产生存储成本。店员端 `wx.scanCode` 读出原文后由 `utils/verify-code.js` 校验前缀与格式，再调 `staffVerify` 做最终判定（店员身份、门店归属、码值、是否过期、CAS 只成功一次全部在服务端）。二维码只是承载凭证的载体，安全边界仍在服务端，扫到别家的码会提示「无法识别」。
 6. 「运营」tab 看达标率、核销率；资金流水 tab 看佣金与取消两类流水
 
 ## 关键实现（对齐 PRD）
