@@ -19,9 +19,11 @@
         <text class="code">{{inv.code}}</text>
         <text class="copy">点击复制</text>
       </view>
-      <view class="link-box" bindtap="copyLink">带参邀请路径：{{path}}</view>
-      <view class="hint">分享给好友，通过邀请码下单并支付即计入有效邀请（按账号去重）</view>
+      <view class="link-box" bindtap="copyText">复制邀请文案：{{shareText}}</view>
+      <view class="hint">分享卡片或邀请码，好友下单并支付即计入有效邀请（按账号去重）</view>
     </view>
+
+    <button class="share-btn" open-type="share" hover-class="share-btn-hover">分享给好友，一起拼单</button>
 
     <view class="card">
       <view class="row"><text>预计佣金</text><text class="green">¥ {{inv.amountYuan}}</text></view>

@@ -3,6 +3,10 @@
 .avatar { width:100rpx; height:100rpx; line-height:100rpx; border-radius:50%; background:#e8f8ee; color:#07C160; font-size:44rpx; margin:0 auto 24rpx; }
 .title { font-size:34rpx; font-weight:600; color:#222; }
 .sub { font-size:26rpx; color:#888; margin-top:16rpx; line-height:1.6; }
+.act { margin-top:28rpx; padding:24rpx; background:#fafafa; border-radius:12rpx; }
+.act-name { font-size:28rpx; color:#333; font-weight:600; }
+.act-goods { font-size:24rpx; color:#888; margin-top:8rpx; }
+.act-price { font-size:44rpx; color:#e64545; font-weight:700; margin-top:12rpx; }
 .code-row { margin-top:32rpx; background:#f0faf4; border:2rpx dashed #07C160; padding:24rpx; border-radius:12rpx; display:flex; justify-content:center; align-items:center; gap:20rpx; }
 .code-label { font-size:24rpx; color:#888; }
 .code { font-size:40rpx; font-weight:700; letter-spacing:4rpx; color:#07C160; }

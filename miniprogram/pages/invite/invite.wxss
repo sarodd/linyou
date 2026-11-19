@@ -25,3 +25,6 @@
 .btn-ok { background:#e8f8ee; color:#07C160; }
 .btn-fail { background:#fdecec; color:#e64545; }
 .warn { color:#e64545; }
+.share-btn { margin:20rpx 24rpx 0; background:#07C160; color:#fff; font-size:30rpx; font-weight:600; line-height:1.4; padding:24rpx 0; border-radius:12rpx; }
+.share-btn::after { border:none; }
+.share-btn-hover { opacity:.85; }

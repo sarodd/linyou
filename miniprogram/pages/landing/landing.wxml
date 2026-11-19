@@ -3,7 +3,12 @@
     <view class="avatar">礼</view>
     <view class="title">好友邀请你参与活动</view>
     <view class="sub">通过你的邀请下单并支付，可为好友计入一次有效邀请</view>
-    <view class="code-row">
+    <view wx:if="{{activityName}}" class="act">
+      <view class="act-name">{{activityName}}</view>
+      <view wx:if="{{goodsName}}" class="act-goods">{{goodsName}}</view>
+      <view wx:if="{{priceYuan}}" class="act-price">¥ {{priceYuan}}</view>
+    </view>
+    <view wx:if="{{code}}" class="code-row">
       <text class="code-label">邀请码</text>
       <text class="code">{{code}}</text>
     </view>

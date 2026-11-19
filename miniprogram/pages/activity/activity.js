@@ -9,7 +9,9 @@ Page({
     submitting: false
   },
   onLoad(options) {
-    if (options.code) this.setData({ inviteCode: String(options.code).toUpperCase() })
+    // 优先用页面参数；没有则用分享卡片暂存的邀请码（自动带参，无需手输）
+    const code = (options && options.code) || getApp().getPendingInviteCode()
+    if (code) this.setData({ inviteCode: String(code).toUpperCase() })
     this.load()
   },
   async load() {
@@ -47,6 +49,11 @@ Page({
         INVITE_CLOSED: '该邀请已结束', INVITE_DEADLINE_PASSED: '该邀请已过截止时间',
         NO_ACTIVITY: '活动还没有配置'
       }
+      // 邀请码失效时清掉本地归因与输入框，否则用户会被一个死码卡住无法下单
+      if (['INVALID_INVITE_CODE', 'INVITE_CLOSED', 'INVITE_DEADLINE_PASSED', 'SELF_INVITE'].includes(res.code)) {
+        getApp().clearPendingInviteCode()
+        this.setData({ inviteCode: '' })
+      }
       wx.showToast({ title: map[res.code] || '下单失败', icon: 'none' })
       return
     }
@@ -63,6 +70,8 @@ Page({
       wx.showToast({ title: payMap[pay.code] || '支付处理异常', icon: 'none' })
       return
     }
+    // 归因已落到订单上，本地暂存可以清掉，避免影响下一单
+    getApp().clearPendingInviteCode()
     wx.redirectTo({ url: `/pages/invite/invite?id=${pay.invitationId}` })
   }
 })

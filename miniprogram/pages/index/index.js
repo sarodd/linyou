@@ -90,6 +90,14 @@ Page({
   goActivity() {
     wx.navigateTo({ url: '/pages/activity/activity' })
   },
+  // 首页转发：只做活动传播，不带邀请码（归因统一走邀请页的分享卡片，避免误绑）
+  onShareAppMessage() {
+    const a = this.data.activity || {}
+    const title = a.name
+      ? (a.goodsName ? `${a.name}｜${a.goodsName}` : a.name)
+      : '邻友购 · 一起拼单更划算'
+    return { title, path: '/pages/index/index' }
+  },
   onPullDownRefresh() {
     this.load().then(() => wx.stopPullDownRefresh())
   }
