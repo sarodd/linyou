@@ -302,6 +302,24 @@ module.exports = {
   clearLogin: () => clearLogin()
 }
 
+// wx.requestPayment 的失败原因翻译。
+// 平台侧限制（未备案 / 未正式发布 / 未接入订单发货管理）时，微信只回一句
+// 「由于小程序违规，支付功能暂时无法使用」或 errMsg 里的 banned / no permission，
+// 用户会以为是程序坏了。这里统一翻译成可执行的提示。
+const payFailInfo = (errMsg) => {
+  const m = String(errMsg || '')
+  if (m.indexOf('cancel') >= 0) return { cancelled: true, text: '' }
+  if (/banned|违规|no permission|access denied|暂时无法使用/i.test(m)) {
+    return {
+      cancelled: false,
+      code: 'PAY_BLOCKED',
+      text: '线上支付暂未开通（小程序备案 / 发布审核尚未通过，微信暂时不允许收款）。可先到门店线下付款，审核通过后会自动恢复线上支付。'
+    }
+  }
+  return { cancelled: false, code: 'PAY_FAIL', text: '支付未完成：' + (m || '未知原因') }
+}
+module.exports.payFailInfo = payFailInfo
+
 // 分 -> 元字符串
 const fen2yuan = (fen) => {
   const n = Number(fen || 0) / 100

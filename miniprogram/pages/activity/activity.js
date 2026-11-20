@@ -116,6 +116,7 @@ Page({
     // 真实支付
     if (pre.ok) {
       const p = pre.payParams
+      let failText = ''
       const canceled = await new Promise((resolve) => {
         wx.requestPayment({
           timeStamp: p.timeStamp,
@@ -123,8 +124,13 @@ Page({
           package: p.package,
           signType: p.signType,
           paySign: p.paySign,
-          success: () => resolve(false),
-          fail: (err) => resolve(String((err && err.errMsg) || '').indexOf('cancel') >= 0 ? 'cancel' : 'fail')
+          success: () => resolve('ok'),
+          fail: (err) => {
+            const info = api.payFailInfo(err && err.errMsg)
+            if (info.cancelled) return resolve('cancel')
+            failText = info.text
+            resolve('fail')
+          }
         })
       })
       if (canceled === 'cancel') return null
@@ -136,8 +142,8 @@ Page({
         if (i < 2) await new Promise(r => setTimeout(r, 1500))
       }
       wx.showModal({
-        title: '支付结果确认中',
-        content: '钱已付出但订单还没同步成功，请到「我的订单」下拉刷新，或稍后重试。如长时间未到账请联系门店。',
+        title: '支付未完成',
+        content: failText || '钱已付出但订单还没同步成功，请到「我的订单」下拉刷新，或稍后重试。如长时间未到账请联系门店。',
         showCancel: false
       })
       return null

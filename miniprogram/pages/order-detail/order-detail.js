@@ -54,9 +54,9 @@ Page({
       },
       fail: (err) => {
         this.setData({ paying: false })
-        const msg = String((err && err.errMsg) || '')
-        if (msg.indexOf('cancel') >= 0) return
-        wx.showToast({ title: '支付未完成', icon: 'none' })
+        const info = api.payFailInfo(err && err.errMsg)
+        if (info.cancelled) return
+        wx.showModal({ title: '支付未完成', content: info.text, showCancel: false })
       }
     })
   },
