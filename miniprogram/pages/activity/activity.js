@@ -47,14 +47,36 @@ Page({
         INVALID_INVITE_CODE: '邀请码无效', SELF_INVITE: '不能邀请自己',
         ACTIVITY_ENDED: '活动已结束', ORDER_DEADLINE_PASSED: '已过下单截止时间',
         INVITE_CLOSED: '该邀请已结束', INVITE_DEADLINE_PASSED: '该邀请已过截止时间',
-        NO_ACTIVITY: '活动还没有配置'
+        NO_ACTIVITY: '活动还没有配置', STORE_NOT_FOUND: '该门店已下架，请刷新页面后重选',
+        INVITE_ACTIVITY_MISMATCH: '邀请码不属于当前活动'
       }
       // 邀请码失效时清掉本地归因与输入框，否则用户会被一个死码卡住无法下单
       if (['INVALID_INVITE_CODE', 'INVITE_CLOSED', 'INVITE_DEADLINE_PASSED', 'SELF_INVITE'].includes(res.code)) {
         getApp().clearPendingInviteCode()
         this.setData({ inviteCode: '' })
       }
-      wx.showToast({ title: map[res.code] || '下单失败', icon: 'none' })
+      // 登录态问题优先说清楚：下单失败最容易被「下单失败」四个字掩盖掉
+      if (res.code === 'NO_LOGIN' || res.code === 'NEED_WX_LOGIN') {
+        const diag = api.getLoginDiag ? api.getLoginDiag() : null
+        wx.showModal({
+          title: '微信登录失败',
+          content: (diag && diag.status === 'fail' && diag.reason)
+            ? '原因：' + diag.reason
+            : '登录态无效，请完全退出小程序后重新进入再试',
+          showCancel: false
+        })
+        return
+      }
+      if (map[res.code]) {
+        wx.showToast({ title: map[res.code], icon: 'none' })
+      } else {
+        // 未知错误码直接露出来，否则只能靠猜
+        wx.showModal({
+          title: '下单失败',
+          content: (res.code || 'UNKNOWN') + (res.message ? '：' + res.message : ''),
+          showCancel: false
+        })
+      }
       return
     }
     // 下单成功 -> 拉起微信支付；真实支付未配置时回落到演示支付
