@@ -84,7 +84,7 @@ Page({
       const map = {
         OUT_OF_STOCK: '该门店刚售罄，请重新下单',
         PAY_ALREADY_PROCESSED: '该订单已处理，请到订单页查看',
-        FORBIDDEN: '订单不属于当前账号',
+        FORBIDDEN: '订单属于之前的登录身份，请返回重新下单',
         WXPAY_ERROR: '支付下单失败，请稍后再试'
       }
       wx.showToast({ title: map[pre.code] || pre.message || '支付下单失败', icon: 'none' })

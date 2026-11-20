@@ -221,22 +221,21 @@ const call = async (action, data = {}) => {
 }
 
 // 支付是唯一「必须真实微信身份」的动作：
-// 预览身份拿到的 openid 是本地伪造的 test_*，传给微信支付只会被回「无效的 openid」。
-// 所以支付前先清掉登录失败冷却、强制真登录一次；失败就把原因直接告诉用户，不再静默降级。
+// 预览身份拿到的 openid 是本地伪造的 test_*，而本地缓存的 token 还可能来自更早的
+// AppID 或已失效的会话——这两种情况传给微信支付都只会被回「无效的 openid」。
+// 所以支付前不再信任任何缓存，无条件重新登录一次（静默 wx.login，代价很小）。
 async function prepayWithLogin(data = {}) {
-  if (!readToken()) {
-    clearLogin()
-    const t = await ensureLogin()
-    if (!t) {
-      return { ok: false, code: 'NO_WX_LOGIN', message: '微信登录失败：' + (loginDiag.reason || '未知原因') }
-    }
+  clearLogin()
+  const t = await ensureLogin()
+  if (!t) {
+    return { ok: false, code: 'NO_WX_LOGIN', message: '微信登录失败：' + (loginDiag.reason || '未知原因') }
   }
   const r = await call('prepay', data)
+  // 云端仍判定非真实身份：再重登一次（应对并发下写的旧缓存），失败就如实报原因
   if (r && r.code === 'NEED_WX_LOGIN') {
-    // 本地有 token 但云端认定不是真实身份（例如缓存里是旧的预览态）：清掉重登再试一次
     clearLogin()
-    const t = await ensureLogin()
-    if (!t) {
+    const t2 = await ensureLogin()
+    if (!t2) {
       return { ok: false, code: 'NO_WX_LOGIN', message: '微信登录失败：' + (loginDiag.reason || '未知原因') }
     }
     return call('prepay', data)

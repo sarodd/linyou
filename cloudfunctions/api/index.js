@@ -207,7 +207,11 @@ async function resolveIdentity(e) {
   // 2) 自定义登录态：wx.login -> code2session -> token
   if (e.token) {
     const s = await db.collection(C.SESSION).doc(String(e.token)).get().catch(() => null)
-    if (s && s.data && s.data.expiresAt > now()) {
+    // appid 校验：openid 只在「签发它的那个 AppID」下有效。
+    // 历史上换过 AppID、或早于本次改动签发的会话（无 appid 字段）一律视为失效，
+    // 否则会拿一个真实但属于别的 AppID 的 openid 去支付，微信只会回「无效的 openid」。
+    const sameApp = s && s.data && s.data.appid === WX_APPID
+    if (s && s.data && s.data.expiresAt > now() && sameApp) {
       return { openid: s.data.openid, source: 'wx', isTest: false }
     }
     return { openid: null, source: 'expired', isTest: false }
@@ -255,6 +259,8 @@ async function login(event) {
   await db.collection(C.SESSION).add({
     data: {
       _id: token, openid: oid, wxOpenid: wxRes.openid,
+      // 记录签发时的 AppID：openid 与 AppID 强绑定，换 AppID 后旧 token 必须失效
+      appid: WX_APPID,
       createdAt: now(), expiresAt: now() + SESSION_TTL
     }
   })
@@ -1101,8 +1107,15 @@ async function prepay(event) {
     await log('prepay', { orderId, outTradeNo: o.orderNo })
     return { ok: true, payParams: wxpay.buildPayParams(prepayId), outTradeNo: o.orderNo }
   } catch (e) {
-    await log('prepay_fail', { orderId, code: e.code || '', message: e.message })
-    return { ok: false, code: e.code || 'WXPAY_ERROR', message: e.message }
+    // 身份指纹：微信只回一句「无效的 openid」，必须由我们自己带上「是哪个身份、从哪来的」，
+    // 否则线上只能靠猜。sha256 前 8 位不可逆，可安全回给前端展示。
+    const fp = crypto.createHash('sha256').update(String(oid)).digest('hex').slice(0, 8)
+    const tag = `｜身份来源=${__identity.source}，openid 指纹=${String(oid).slice(0, 6)}…${fp}`
+    await log('prepay_fail', {
+      orderId, code: e.code || '', message: e.message,
+      source: __identity.source, fp, openidLen: String(oid).length
+    })
+    return { ok: false, code: e.code || 'WXPAY_ERROR', message: String(e.message || '支付下单失败') + tag }
   }
 }
 
