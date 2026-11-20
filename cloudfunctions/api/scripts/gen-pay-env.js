@@ -11,6 +11,8 @@
  * 用法：
  *   node cloudfunctions/api/scripts/gen-pay-env.js                 # 默认读当前目录
  *   node cloudfunctions/api/scripts/gen-pay-env.js D:/wxpay-cert   # 指定证书目录
+ *   node cloudfunctions/api/scripts/gen-pay-env.js D:/wxpay-cert --serial 7681...058B
+ *                                                                 # 顺带核对平台登记的序列号
  *
  * 期望目录内有：
  *   apiclient_cert.pem   商户 API 证书（证书工具生成，需已贴回商户平台完成申请）
@@ -24,7 +26,17 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 
-const dir = process.argv[2] || process.cwd()
+const args = process.argv.slice(2)
+function argOf(flag) {
+  const i = args.indexOf(flag)
+  if (i === -1) return null
+  const v = args[i + 1]
+  args.splice(i, v !== undefined && !String(v).startsWith('--') ? 2 : 1)
+  return v && !String(v).startsWith('--') ? String(v) : null
+}
+// --serial 可以传入商户平台「管理证书」页显示的序列号，用于核对证书文件是否同一张
+const EXPECTED_SERIAL = argOf('--serial') || process.env.MCH_SERIAL_NO || null
+const dir = args[0] || process.cwd()
 const MCH_ID = process.env.MCH_ID || '1006122850'
 const NOTIFY_URL =
   process.env.PAY_NOTIFY_URL ||
@@ -79,6 +91,11 @@ try {
 const serial = String(x509.serialNumber || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase()
 if (!serial) die('没能从证书里读到序列号')
 
+// 若外部给了序列号（商户平台「管理证书」页看到的那个），核对是否同一张证书。
+// 不一致通常意味着手里是旧证书文件，而平台登记的是新证书，签名会被拒。
+const expected = EXPECTED_SERIAL ? String(EXPECTED_SERIAL).replace(/[^0-9a-fA-F]/g, '').toUpperCase() : null
+const serialMatched = !expected || expected === serial
+
 // ---- 3) 私钥与证书必须是一对 ----
 const fromKey = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' })
 const fromCert = x509.publicKey.export({ type: 'spki', format: 'der' })
@@ -99,11 +116,19 @@ console.log('\n=========== 本地产物自检 ===========')
 console.log('证书主题   :', x509.subject.replace(/\n/g, ' '))
 console.log('证书有效期 :', x509.validFrom, '→', x509.validTo, expired ? '  [已过期]' : '  [有效]')
 console.log('证书序列号 :', serial, '(' + serial.length + ' 位)')
+if (expected) {
+  console.log('平台序列号 :', expected, serialMatched ? '  [与证书一致]' : '  [与证书不一致]')
+}
 console.log('私钥算法   :', privateKey.asymmetricKeyType, privateKey.asymmetricKeyDetails ? privateKey.asymmetricKeyDetails.modulusLength + ' bit' : '')
 console.log('公私钥配对 :', paired ? '匹配' : '不匹配 —— 私钥和证书不是同一张，请重新申请证书')
 console.log('微信支付公钥:', pubKey.asymmetricKeyType)
 if (expired) console.log('警告：证书已过期，签名会被微信拒绝，请重新申请。')
 if (!paired) process.exitCode = 2
+if (!serialMatched) {
+  console.log('警告：你给的序列号与 apiclient_cert.pem 里的不一致。')
+  console.log('      说明这个证书目录里放的不是平台当前登记的那一张，签名会返回 401 SIGN_ERROR。')
+  if (process.exitCode === undefined) process.exitCode = 3
+}
 
 // ---- 5) 输出环境变量 ----
 const envBlock = [
