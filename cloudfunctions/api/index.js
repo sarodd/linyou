@@ -84,6 +84,14 @@ function openid() {
   return __identity.openid || 'anonymous'
 }
 
+// 库里存的 openid 带命名空间前缀（wx_ 真实微信 / test_ 测试身份），用来区分身份来源；
+// 但微信侧接口（支付下单、内容安全）只认裸 openid。出网前必须剥掉前缀——
+// 曾经因为把 'wx_xxx' 直接当 payer.openid 发出去，微信一直回「无效的 openid」。
+function bareOpenid(oid) {
+  const s = String(oid || '')
+  return s.indexOf('wx_') === 0 ? s.slice(3) : s
+}
+
 function httpsGetJson(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, (res) => {
@@ -150,7 +158,7 @@ async function secCheckText(content, oid) {
   try {
     const r = await httpsPost(
       'https://api.weixin.qq.com/wxa/msg_sec_check?access_token=' + encodeURIComponent(token),
-      JSON.stringify({ content: text, version: 2, scene: 2, openid: oid }),
+      JSON.stringify({ content: text, version: 2, scene: 2, openid: bareOpenid(oid) }),
       { 'Content-Type': 'application/json' }
     )
     if (r && r.errcode === 87014) return 'risky'
@@ -251,7 +259,12 @@ async function login(event) {
   try { await db.createCollection(C.SESSION) } catch (e) {}
   const oid = 'wx_' + wxRes.openid
   // 同一微信号复用未过期会话，避免每次冷启动都新建记录
-  const old = await db.collection(C.SESSION).where({ openid: oid, expiresAt: _.gt(now()) }).limit(1).get().catch(() => ({ data: [] }))
+  // 同一微信号复用未过期会话。appid 必须一起匹配：
+  // 早于 appid 字段上线的旧会话（appid 为空）若被复用，resolveIdentity 会判定失效，
+  // 而登录又一直返回这条旧 token，形成「登录成功但始终 NO_LOGIN」的死循环。
+  const old = await db.collection(C.SESSION)
+    .where({ openid: oid, appid: WX_APPID, expiresAt: _.gt(now()) }).limit(1).get()
+    .catch(() => ({ data: [] }))
   if (old.data && old.data.length) {
     return { ok: true, token: old.data[0]._id, openid: oid, expiresAt: old.data[0].expiresAt, reused: true }
   }
@@ -1094,7 +1107,7 @@ async function prepay(event) {
 
   try {
     const prepayId = await wxpay.jsapiPrepay({
-      openid: oid,
+      openid: bareOpenid(oid),
       outTradeNo: o.orderNo,
       amountFen: o.amountFen,
       description: (o.goodsName || '门店商品') + (o.spec ? ' ' + o.spec : ''),
