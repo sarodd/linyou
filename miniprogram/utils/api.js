@@ -220,6 +220,30 @@ const call = async (action, data = {}) => {
   return r
 }
 
+// 支付是唯一「必须真实微信身份」的动作：
+// 预览身份拿到的 openid 是本地伪造的 test_*，传给微信支付只会被回「无效的 openid」。
+// 所以支付前先清掉登录失败冷却、强制真登录一次；失败就把原因直接告诉用户，不再静默降级。
+async function prepayWithLogin(data = {}) {
+  if (!readToken()) {
+    clearLogin()
+    const t = await ensureLogin()
+    if (!t) {
+      return { ok: false, code: 'NO_WX_LOGIN', message: '微信登录失败：' + (loginDiag.reason || '未知原因') }
+    }
+  }
+  const r = await call('prepay', data)
+  if (r && r.code === 'NEED_WX_LOGIN') {
+    // 本地有 token 但云端认定不是真实身份（例如缓存里是旧的预览态）：清掉重登再试一次
+    clearLogin()
+    const t = await ensureLogin()
+    if (!t) {
+      return { ok: false, code: 'NO_WX_LOGIN', message: '微信登录失败：' + (loginDiag.reason || '未知原因') }
+    }
+    return call('prepay', data)
+  }
+  return r
+}
+
 module.exports = {
   seed: () => call('seed'),
   getActivity: () => call('getActivity'),
@@ -244,7 +268,7 @@ module.exports = {
   adminSaveStore: (d) => call('adminSaveStore', d),
   adminDeleteStore: (d) => call('adminDeleteStore', d),
   createOrder: (d) => call('createOrder', d),
-  prepay: (d) => call('prepay', d),
+  prepay: (d) => prepayWithLogin(d),
   payQuery: (d) => call('payQuery', d),
   adminRefund: (d) => call('adminRefund', d),
   adminSyncRefund: (d) => call('adminSyncRefund', d),

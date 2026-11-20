@@ -72,6 +72,15 @@ Page({
     const pre = await api.prepay({ orderId })
 
     if (!pre.ok && pre.code !== 'PAY_NOT_CONFIGURED') {
+      // 登录态问题文案较长，用弹窗而不是 toast，否则被截断后用户看不懂
+      if (pre.code === 'NEED_WX_LOGIN' || pre.code === 'NO_WX_LOGIN') {
+        wx.showModal({
+          title: '需要微信登录',
+          content: pre.message || '请退出小程序重新进入后再支付',
+          showCancel: false
+        })
+        return null
+      }
       const map = {
         OUT_OF_STOCK: '该门店刚售罄，请重新下单',
         PAY_ALREADY_PROCESSED: '该订单已处理，请到订单页查看',

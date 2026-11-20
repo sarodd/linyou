@@ -1056,6 +1056,21 @@ async function prepay(event) {
   const oid = openid()
   const { orderId } = event
   if (!orderId) return { ok: false, code: 'BAD_ORDER' }
+
+  // 真实支付必须用真实微信身份：预览/测试身份的 openid 是本地伪造的（test_*），
+  // 传给微信支付只会得到「无效的 openid」，用户完全不知道该怎么办。
+  // 这里提前拦死，并把「为什么没登录」透出来，避免把问题甩给微信。
+  if (__identity.isTest || !__identity.openid || String(__identity.openid).indexOf('test_') === 0) {
+    const why = __identity.isTest ? '当前是预览测试身份' : '当前没有微信登录态'
+    return {
+      ok: false,
+      code: 'NEED_WX_LOGIN',
+      message: why + '，无法发起真实支付。请完全退出小程序后重新进入以触发微信登录；'
+        + '若仍失败，检查云函数 WX_APPSECRET 是否正确、以及 request 合法域名是否包含 '
+        + 'linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com'
+    }
+  }
+
   if (!wxpay.isConfigured()) {
     return {
       ok: false, code: 'PAY_NOT_CONFIGURED',
