@@ -3,3 +3,10 @@ project.private.config.json
 .env
 .env.*
 !.env.example
+
+# 微信支付密钥与证书：私钥只存在于本地与云函数环境变量，任何情况下不得入库
+*.pem
+*.p12
+apiclient_*
+WXCertUtil*
+pay-env.local.txt
