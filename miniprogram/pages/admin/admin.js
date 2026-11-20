@@ -77,6 +77,54 @@ Page({
       refundsLoaded: true
     })
   },
+  // 走微信支付原路退款
+  refundChannel(e) {
+    const id = e.currentTarget.dataset.id
+    const amount = e.currentTarget.dataset.amount
+    if (!id || this.data.refunding) return
+    wx.showModal({
+      title: '微信原路退款',
+      content: '将通过微信支付向用户原路退回 ¥' + amount + '，退款不可撤销。确认继续？',
+      confirmText: '确认退款',
+      confirmColor: '#e64340',
+      success: async (r) => {
+        if (!r.confirm) return
+        this.setData({ refunding: true })
+        wx.showLoading({ title: '提交退款', mask: true })
+        const res = await api.adminRefund({ commissionId: id })
+        wx.hideLoading()
+        this.setData({ refunding: false })
+        if (res.ok) {
+          wx.showToast({ title: res.status === 'SUCCESS' ? '退款成功' : '已提交，稍后同步', icon: 'none', duration: 2500 })
+          this.loadRefunds()
+          this.load()
+        } else {
+          wx.showModal({ title: '退款失败', content: res.message || res.code || '未知错误', showCancel: false })
+          this.loadRefunds()
+        }
+      }
+    })
+  },
+
+  // 退款是异步的，微信先受理再落地，需要主动查一次最终状态
+  async syncRefund(e) {
+    const id = e.currentTarget.dataset.id
+    if (!id || this.data.refunding) return
+    this.setData({ refunding: true })
+    wx.showLoading({ title: '同步中', mask: true })
+    const res = await api.adminSyncRefund({ commissionId: id })
+    wx.hideLoading()
+    this.setData({ refunding: false })
+    if (res.ok) {
+      const map = { SUCCESS: '退款成功', PROCESSING: '仍在处理中', CLOSED: '退款已关闭', ABNORMAL: '退款异常' }
+      wx.showToast({ title: map[res.status] || res.status || '已同步', icon: 'none', duration: 2500 })
+      this.loadRefunds()
+      this.load()
+    } else {
+      wx.showModal({ title: '同步失败', content: res.message || res.code || '未知错误', showCancel: false })
+    }
+  },
+
   markRefund(e) {
     const id = e.currentTarget.dataset.id
     const amount = e.currentTarget.dataset.amount

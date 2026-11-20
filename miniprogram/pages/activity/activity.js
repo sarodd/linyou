@@ -57,21 +57,74 @@ Page({
       wx.showToast({ title: map[res.code] || '下单失败', icon: 'none' })
       return
     }
-    // 下单成功 -> 模拟支付 -> 跳转邀请进度
+    // 下单成功 -> 拉起微信支付；真实支付未配置时回落到演示支付
+    const done = await this.payOrder(res.order._id)
+    if (!done) return
+    // 归因已落到订单上，本地暂存可以清掉，避免影响下一单
+    getApp().clearPendingInviteCode()
+    wx.redirectTo({ url: `/pages/invite/invite?id=${done.invitationId}` })
+  },
+
+  // 支付：优先真实微信支付，未配置则演示支付
+  // 注意：客户端 requestPayment 的 success 只代表「用户付了」，
+  // 订单是否真的入账必须以服务端查单结果为准，否则可能被改包的客户端骗成已支付。
+  async payOrder(orderId) {
+    const pre = await api.prepay({ orderId })
+
+    if (!pre.ok && pre.code !== 'PAY_NOT_CONFIGURED') {
+      const map = {
+        OUT_OF_STOCK: '该门店刚售罄，请重新下单',
+        PAY_ALREADY_PROCESSED: '该订单已处理，请到订单页查看',
+        FORBIDDEN: '订单不属于当前账号',
+        WXPAY_ERROR: '支付下单失败，请稍后再试'
+      }
+      wx.showToast({ title: map[pre.code] || pre.message || '支付下单失败', icon: 'none' })
+      return null
+    }
+
+    // 真实支付
+    if (pre.ok) {
+      const p = pre.payParams
+      const canceled = await new Promise((resolve) => {
+        wx.requestPayment({
+          timeStamp: p.timeStamp,
+          nonceStr: p.nonceStr,
+          package: p.package,
+          signType: p.signType,
+          paySign: p.paySign,
+          success: () => resolve(false),
+          fail: (err) => resolve(String((err && err.errMsg) || '').indexOf('cancel') >= 0 ? 'cancel' : 'fail')
+        })
+      })
+      if (canceled === 'cancel') return null
+
+      // 无论客户端成功还是失败，都以服务端查单为准（回调可能还在路上）
+      for (let i = 0; i < 3; i++) {
+        const q = await api.payQuery({ orderId })
+        if (q.ok && q.paid) return { invitationId: q.invitationId }
+        if (i < 2) await new Promise(r => setTimeout(r, 1500))
+      }
+      wx.showModal({
+        title: '支付结果确认中',
+        content: '钱已付出但订单还没同步成功，请到「我的订单」下拉刷新，或稍后重试。如长时间未到账请联系门店。',
+        showCancel: false
+      })
+      return null
+    }
+
+    // 演示支付
     wx.showLoading({ title: '模拟支付中' })
-    const pay = await api.mockPay({ orderId: res.order._id })
+    const pay = await api.mockPay({ orderId })
     wx.hideLoading()
     if (!pay.ok) {
       const payMap = {
         OUT_OF_STOCK: '该门店刚售罄，请换一家门店重新下单',
-        MOCK_PAY_DISABLED: '演示支付已关闭，等待接入微信支付',
+        MOCK_PAY_DISABLED: '微信支付尚未配置，暂时无法支付',
         PAY_ALREADY_PROCESSED: '该订单已处理，请到订单页查看'
       }
       wx.showToast({ title: payMap[pay.code] || '支付处理异常', icon: 'none' })
-      return
+      return null
     }
-    // 归因已落到订单上，本地暂存可以清掉，避免影响下一单
-    getApp().clearPendingInviteCode()
-    wx.redirectTo({ url: `/pages/invite/invite?id=${pay.invitationId}` })
+    return { invitationId: pay.invitationId }
   }
 })

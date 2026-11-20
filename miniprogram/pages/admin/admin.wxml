@@ -106,12 +106,14 @@
         <view class="ledger-meta">买家 {{item.buyerShort}} · {{item.statusText}}</view>
         <view class="ledger-meta">{{item.timeText}}</view>
         <view class="refund-actions">
-          <view class="refund-btn" bindtap="markRefund" data-id="{{item.commissionId}}" data-amount="{{item.amountYuan}}">标记已退款</view>
+          <view wx:if="{{item.refundId}}" class="refund-btn ghost" bindtap="syncRefund" data-id="{{item.commissionId}}">同步退款状态</view>
+          <view wx:elif="{{item.status !== 'processing'}}" class="refund-btn" bindtap="refundChannel" data-id="{{item.commissionId}}" data-amount="{{item.amountYuan}}">微信原路退款</view>
+          <view class="refund-btn ghost" bindtap="markRefund" data-id="{{item.commissionId}}" data-amount="{{item.amountYuan}}">标记线下已退</view>
         </view>
       </view>
       <view wx:if="{{refunds.length === 0}}" class="empty-inline">没有待处理的退款</view>
     </view>
-    <view class="notice">接入微信支付后此处直接调退款接口；当前用于登记线下退款，避免出现「用户已达标但没人处理」。标记后佣金状态变为已到账，并写入资金流水。</view>
+    <view class="notice">「微信原路退款」直接调微信支付退款接口，钱原路退回用户微信；「标记线下已退」用于现金/转账等线下方式。两条路径互斥：走过渠道退款的单不允许再被标记线下已退，避免同一笔钱付两次。退款是异步的，提交后过几秒点「同步退款状态」确认最终结果。</view>
   </block>
 
   <block wx:if="{{tab === 'finance'}}">

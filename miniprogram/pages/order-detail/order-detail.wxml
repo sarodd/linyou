@@ -7,6 +7,12 @@
       <view wx:if="{{order.status === 'verified'}}" class="status-sub">已核销，感谢购买</view>
     </view>
 
+    <view class="card" wx:if="{{order.status === 'pending_pay'}}">
+      <view class="section-title">待支付</view>
+      <view class="hint">请尽快完成支付；长时间未支付的订单会被关闭并释放库存</view>
+      <view class="pay-btn" bindtap="payNow">{{paying ? '支付中…' : '继续支付 ¥ ' + order.amountYuan}}</view>
+    </view>
+
     <view class="card" wx:if="{{order.status === 'paid'}}">
       <view class="section-title">核销码</view>
       <view wx:if="{{!verifyCode}}" class="code-placeholder" bindtap="genCode">点击生成核销码（5 分钟有效）</view>

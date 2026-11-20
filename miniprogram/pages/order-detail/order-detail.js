@@ -16,13 +16,50 @@ const QR_SIZE = 220
 Page({
   data: {
     id: '', loading: true, order: null, invitation: null, commission: null,
-    verifyCode: null, countdownText: ''
+    verifyCode: null, countdownText: '', paying: false
   },
   onLoad(options) {
     this.setData({ id: options.id || '' })
     this.load()
   },
   onUnload() { this.stopCountdown() },
+
+  // 待支付订单继续付款：用户取消支付后不能就此卡住，
+  // 否则 createOrder 会因「已有订单」拒绝再次下单，等于永久无法购买。
+  async payNow() {
+    if (this.data.paying) return
+    this.setData({ paying: true })
+    const pre = await api.prepay({ orderId: this.data.id })
+    if (!pre.ok) {
+      this.setData({ paying: false })
+      wx.showModal({ title: '无法发起支付', content: pre.message || pre.code || '未知错误', showCancel: false })
+      return
+    }
+    const p = pre.payParams
+    wx.requestPayment({
+      timeStamp: p.timeStamp,
+      nonceStr: p.nonceStr,
+      package: p.package,
+      signType: p.signType,
+      paySign: p.paySign,
+      success: async () => {
+        // 客户端成功不等于入账，以服务端查单为准
+        for (let i = 0; i < 3; i++) {
+          const q = await api.payQuery({ orderId: this.data.id })
+          if (q.ok && q.paid) break
+          if (i < 2) await new Promise(r => setTimeout(r, 1500))
+        }
+        this.setData({ paying: false })
+        this.load()
+      },
+      fail: (err) => {
+        this.setData({ paying: false })
+        const msg = String((err && err.errMsg) || '')
+        if (msg.indexOf('cancel') >= 0) return
+        wx.showToast({ title: '支付未完成', icon: 'none' })
+      }
+    })
+  },
   async load() {
     const res = await api.getOrderDetail({ orderId: this.data.id })
     if (res.ok) {

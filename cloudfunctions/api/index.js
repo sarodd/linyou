@@ -7,11 +7,13 @@
  * - 幂等：佣金单 / 邀请有效记录使用确定性 _id；支付回调按订单状态 CAS
  * - 并发互斥：资金锁定与达标判定放在 db.runTransaction 内，配合状态 CAS
  * - 规则版本：订单快照购买时的活动规则版本
- * - 当前为「可预览版」：支付与渠道退款为 mock，接真实微信支付时替换 mockPay / mockRefund 两处
+ * - 当前已接入微信支付 APIv3（普通商户直连）：prepay 下单、handlePayNotify 回调、
+ *   adminRefund/adminSyncRefund 渠道退款；mockPay 仅在显式设 MOCK_PAY_ENABLED=true 时可用。
  */
 const cloud = require('wx-server-sdk')
 const crypto = require('crypto')
 const https = require('https')
+const wxpay = require('./wxpay')
 // 说明：曾尝试换成 @cloudbase/node-sdk v4 瘦身，但其 API 与 wx-server-sdk 不兼容
 // （doc().get().data 变数组、update() 返回 {updated} 而非 {stats:{updated}}、写入不再包 {data}），
 // 全量迁移风险高于收益，故继续使用 wx-server-sdk，瘦身改走「剔除类型包」的方式。
@@ -57,9 +59,10 @@ const PREVIEW_ADMIN = process.env.PREVIEW_ADMIN === 'true'
 // 自检接口开关。e2eTest / edgeTest 会清空订单、邀请、佣金、流水、店员、日志等业务集合，
 // 一旦线上误触就是不可逆的数据事故，因此默认禁用，仅在明确需要时临时开启。
 const ALLOW_SELF_TEST = process.env.ALLOW_SELF_TEST === 'true'
-// 演示支付开关。未接入真实微信支付前，mockPay 允许前端直接把订单置为已支付；
-// 上线前设为 false 即可关闭该入口（mockRefund 同属渠道模拟，一并受此开关约束）。
-const MOCK_PAY_ENABLED = process.env.MOCK_PAY_ENABLED !== 'false'
+// 演示支付开关。接入真实微信支付后默认关闭，必须显式设 MOCK_PAY_ENABLED=true 才打开。
+// 这个方向很重要：以前的写法是「没写 false 就等于打开」，一旦忘记配置，
+// 线上任何人点支付都能白拿订单，是比功能缺失严重得多的漏洞。
+const MOCK_PAY_ENABLED = process.env.MOCK_PAY_ENABLED === 'true'
 const ADMIN_OPENIDS = String(process.env.ADMIN_OPENIDS || '').split(',').map(s => s.trim()).filter(Boolean)
 // 预览期可提权的固定演示身份（前端登录兜底固定为 preview，自检脚本用 staff）。
 // 任意其他 _testOpenid 一律降为普通用户，堵住「随便编个身份就是管理员」的提权口子。
@@ -961,10 +964,71 @@ async function createOrder(event) {
   return { ok: true, order }
 }
 
-// ---------- 支付成功（mock，替换点 1）----------
-// 真实场景：微信支付回调验签后调用本函数；此处由前端直接触发用于预览。
+// ---------- 支付成功落库（演示支付与微信支付回调共用）----------
 // 关键顺序：先原子占库存（带 stock>0 条件），再 CAS 订单状态。
 // 任何一步失败都不会留下「已付款但超卖」或「扣了库存但订单没变成已支付」的脏数据。
+// 入参不带 openid：真实回调里没有登录态，买家以订单里记录的 buyer 为准。
+async function settlePaidOrder(orderId, opts) {
+  const { transactionId = null, source = 'mock' } = opts || {}
+  const cur = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  if (!cur || !cur.data) return { ok: false, code: 'NOT_FOUND' }
+  const order0 = cur.data
+  if (order0.status !== 'pending_pay') {
+    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: order0.status }
+  }
+
+  // 1) 原子占库存：where 里带 stock > 0，并发下只有一个请求能扣成功，杜绝超卖
+  const stockRes = await db.collection(C.STORE)
+    .where({ _id: order0.storeId, stock: _.gt(0) })
+    .update({ data: { stock: _.inc(-1) } })
+    .catch(() => ({ stats: { updated: 0 } }))
+  if (!stockRes.stats || stockRes.stats.updated === 0) {
+    return { ok: false, code: 'OUT_OF_STOCK', message: '该门店已售罄，请换一家门店下单' }
+  }
+
+  // 2) CAS：只有 pending_pay -> paid 的第一次调用成功，保证回调重试幂等
+  const payRes = await db.collection(C.ORDER).where({ _id: orderId, status: 'pending_pay' }).update({
+    data: { status: 'paid', paidAt: now(), transactionId, paidSource: source }
+  })
+  if (!payRes.stats || payRes.stats.updated === 0) {
+    // 并发下已被别的请求处理：把刚占用的库存还回去，避免凭空少一件
+    await db.collection(C.STORE).doc(order0.storeId).update({ data: { stock: _.inc(1) } }).catch(() => {})
+    const latest = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: latest && latest.data ? latest.data.status : null }
+  }
+
+  const order = (await db.collection(C.ORDER).doc(orderId).get()).data
+
+  // 3) 为原订单生成邀请记录（邀请码 + 带参链接）。
+  //    达标人数与邀请截止在此时刻快照，后续运营改配置不影响已下单的用户。
+  const invitationId = 'INV_' + orderId
+  const invitation = {
+    _id: invitationId,
+    code: genInviteCode(),
+    orderId,
+    buyer: order.buyer,
+    activityId: order.activityId,
+    status: 'accumulating',   // accumulating -> locked / void
+    validCount: 0,
+    target: null,
+    // 规则快照：优先使用下单时写入订单的值
+    targetSnapshot: order.inviteTargetSnapshot || null,
+    deadlineSnapshot: order.inviteDeadlineSnapshot || null,
+    createdAt: now()
+  }
+  // 回调可能因超时重推：_id 固定，重复写入直接忽略，不阻断主流程
+  await db.collection(C.INVITATION).add({ data: invitation }).catch(() => {})
+
+  // 4) 若该单有归因，记录有效邀请关系（按受邀账号去重）
+  if (order.inviterInvitationId) {
+    await addInviteRecord(order.inviterInvitationId, order.buyer, orderId)
+  }
+
+  const saved = await db.collection(C.INVITATION).doc(invitationId).get().catch(() => null)
+  return { ok: true, order, invitationId, code: (saved && saved.data && saved.data.code) || invitation.code }
+}
+
+// ---------- 演示支付（未接真实支付时使用）----------
 async function mockPay(event) {
   if (!MOCK_PAY_ENABLED) {
     return { ok: false, code: 'MOCK_PAY_DISABLED', message: '演示支付已关闭，等待接入微信支付' }
@@ -980,56 +1044,129 @@ async function mockPay(event) {
     return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: cur.data.status }
   }
 
-  // 1) 原子占库存：where 里带 stock > 0，并发下只有一个请求能扣成功，杜绝超卖
-  const stockRes = await db.collection(C.STORE)
-    .where({ _id: cur.data.storeId, stock: _.gt(0) })
-    .update({ data: { stock: _.inc(-1) } })
-    .catch(() => ({ stats: { updated: 0 } }))
-  if (!stockRes.stats || stockRes.stats.updated === 0) {
-    return { ok: false, code: 'OUT_OF_STOCK', message: '该门店已售罄，请换一家门店下单' }
-  }
+  const r = await settlePaidOrder(orderId, { transactionId: 'MOCK_' + orderId, source: 'mock' })
+  if (r.ok) await log('mockPay', { orderId, invitationId: r.invitationId })
+  return r
+}
 
-  // 2) CAS：只有 pending_pay -> paid 的第一次调用成功，保证幂等
-  const payRes = await db.collection(C.ORDER).where({ _id: orderId, buyer: oid, status: 'pending_pay' }).update({
-    data: { status: 'paid', paidAt: now() }
-  })
-  if (!payRes.stats || payRes.stats.updated === 0) {
-    // 并发下已被别的请求处理：把刚占用的库存还回去，避免凭空少一件
-    await db.collection(C.STORE).doc(cur.data.storeId).update({ data: { stock: _.inc(1) } }).catch(() => {})
-    const latest = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
-    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: latest && latest.data ? latest.data.status : null }
-  }
-
-  const order = (await db.collection(C.ORDER).doc(orderId).get()).data
-
-  // 3) 为原订单生成邀请记录（邀请码 + 带参链接）。
-  //    达标人数与邀请截止在此时刻快照，后续运营改配置不影响已下单的用户。
-  const code = genInviteCode()
-  const invitationId = 'INV_' + orderId
-  await db.collection(C.INVITATION).add({
-    data: {
-      _id: invitationId,
-      code,
-      orderId,
-      buyer: oid,
-      activityId: order.activityId,
-      status: 'accumulating',   // accumulating -> locked / void
-      validCount: 0,
-      target: null,
-      // 规则快照：优先使用下单时写入订单的值
-      targetSnapshot: order.inviteTargetSnapshot || null,
-      deadlineSnapshot: order.inviteDeadlineSnapshot || null,
-      createdAt: now()
+// ---------- 真实微信支付：下单取 prepay_id ----------
+// 前端拿到 payParams 后调 wx.requestPayment，支付结果由微信异步回调 confirmPaid 落库，
+// 绝不能靠前端「支付成功」的回调直接改订单状态——那是可以被伪造的。
+async function prepay(event) {
+  const oid = openid()
+  const { orderId } = event
+  if (!orderId) return { ok: false, code: 'BAD_ORDER' }
+  if (!wxpay.isConfigured()) {
+    return {
+      ok: false, code: 'PAY_NOT_CONFIGURED',
+      message: '微信支付参数未配置完整，缺少：' + wxpay.missing().join(', ')
     }
-  })
-
-  // 4) 若该单有归因，记录有效邀请关系（按受邀账号去重）
-  if (order.inviterInvitationId) {
-    await addInviteRecord(order.inviterInvitationId, oid, orderId)
   }
 
-  await log('mockPay', { orderId, invitationId })
-  return { ok: true, order, invitationId, code }
+  const doc = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  if (!doc || !doc.data) return { ok: false, code: 'NOT_FOUND' }
+  const o = doc.data
+  if (o.buyer !== oid) return { ok: false, code: 'FORBIDDEN' }
+  if (o.status !== 'pending_pay') {
+    return { ok: false, code: 'PAY_ALREADY_PROCESSED', status: o.status }
+  }
+
+  try {
+    const prepayId = await wxpay.jsapiPrepay({
+      openid: oid,
+      outTradeNo: o.orderNo,
+      amountFen: o.amountFen,
+      description: (o.goodsName || '门店商品') + (o.spec ? ' ' + o.spec : ''),
+      attach: o._id
+    })
+    // 记下商户订单号：退款时必须用它，且必须与下单时完全一致
+    await db.collection(C.ORDER).doc(orderId).update({
+      data: { outTradeNo: o.orderNo, prepayAt: now() }
+    }).catch(() => {})
+    await log('prepay', { orderId, outTradeNo: o.orderNo })
+    return { ok: true, payParams: wxpay.buildPayParams(prepayId), outTradeNo: o.orderNo }
+  } catch (e) {
+    await log('prepay_fail', { orderId, code: e.code || '', message: e.message })
+    return { ok: false, code: e.code || 'WXPAY_ERROR', message: e.message }
+  }
+}
+
+// ---------- 主动查单：回调丢失时的兜底 ----------
+// 微信回调可能因为函数超时/网络抖动没送达，用户实际已付款但订单还是待支付。
+// 前端在 requestPayment 返回后调用一次，比等用户投诉可靠得多。
+async function payQuery(event) {
+  const oid = openid()
+  const { orderId } = event
+  if (!orderId) return { ok: false, code: 'BAD_ORDER' }
+  const doc = await db.collection(C.ORDER).doc(orderId).get().catch(() => null)
+  if (!doc || !doc.data) return { ok: false, code: 'NOT_FOUND' }
+  const o = doc.data
+  if (o.buyer !== oid) return { ok: false, code: 'FORBIDDEN' }
+  if (o.status !== 'pending_pay') return { ok: true, paid: true, status: o.status }
+  if (!wxpay.isConfigured()) return { ok: false, code: 'PAY_NOT_CONFIGURED' }
+
+  try {
+    const r = await wxpay.queryOrder(o.orderNo)
+    if (r.trade_state === 'SUCCESS') {
+      const s = await settlePaidOrder(orderId, { transactionId: r.transaction_id, source: 'wxpay_query' })
+      return { ok: true, paid: true, status: 'paid', settled: s.ok, invitationId: s.invitationId, code: s.code }
+    }
+    return { ok: true, paid: false, tradeState: r.trade_state }
+  } catch (e) {
+    return { ok: false, code: e.code || 'WXPAY_ERROR', message: e.message }
+  }
+}
+
+// ---------- 支付结果回调（微信 -> 云函数）----------
+// 必须在解析 body 之前拿到「原始报文字节」，否则签名对不上。
+// 返回值约定：处理成功回 {code:'SUCCESS'}；失败回 {code:'FAIL'} 让微信重试。
+async function handlePayNotify(headers, rawBody) {
+  const v = wxpay.verifyNotify(headers, rawBody)
+  if (!v.ok) {
+    await log('payNotify_verify_fail', v)
+    return { code: 'FAIL', message: 'signature verify failed' }
+  }
+  let body = null
+  try { body = JSON.parse(rawBody) } catch (e) {
+    return { code: 'FAIL', message: 'bad body' }
+  }
+  // 只处理支付成功事件，其他事件（如退款通知）直接确认，避免微信无意义重试
+  if (body.event_type && body.event_type !== 'TRANSACTION.SUCCESS') {
+    return { code: 'SUCCESS', message: 'ignored' }
+  }
+  let data = null
+  try { data = wxpay.decryptResource(body.resource) } catch (e) {
+    await log('payNotify_decrypt_fail', { message: e.message })
+    return { code: 'FAIL', message: 'decrypt failed' }
+  }
+  if (!data || data.trade_state !== 'SUCCESS') {
+    return { code: 'SUCCESS', message: 'not success' }
+  }
+
+  const orderNo = data.out_trade_no
+  const found = await db.collection(C.ORDER).where({ orderNo }).limit(1).get().catch(() => ({ data: [] }))
+  if (!found.data.length) {
+    await log('payNotify_order_missing', { orderNo })
+    return { code: 'FAIL', message: 'order not found' }
+  }
+  const order = found.data[0]
+
+  // 金额校验：验签已能防伪造，但这层几乎零成本，能挡住「金额被改小」这类事故
+  const paidFen = data.amount && data.amount.total
+  if (Number(paidFen) !== Number(order.amountFen)) {
+    await log('payNotify_amount_mismatch', { orderId: order._id, paidFen, expectFen: order.amountFen })
+    return { code: 'FAIL', message: 'amount mismatch' }
+  }
+  // 商户号也要对：防止别的商户号的回调串进来（同一套回调地址复用时才会发生）
+  if (wxpay.MCH_ID && data.mchid && data.mchid !== wxpay.MCH_ID) {
+    await log('payNotify_mch_mismatch', { orderId: order._id, mchid: data.mchid })
+    return { code: 'FAIL', message: 'mchid mismatch' }
+  }
+
+  const r = await settlePaidOrder(order._id, { transactionId: data.transaction_id, source: 'wxpay' })
+  await log('payNotify', { orderId: order._id, ok: r.ok, code: r.code || '', transactionId: data.transaction_id })
+  // 已经处理过（回调重推）同样回 SUCCESS，否则微信会一直重试
+  return { code: 'SUCCESS', message: '成功' }
 }
 
 function genInviteCode() {
@@ -1303,6 +1440,7 @@ async function adminCommissions(event) {
       amountFen: c.amountFen,
       status: c.status,
       refundNo: c.refundNo || '',
+      refundId: c.refundId || '',
       channelStatus: c.channelStatus || '',
       storeName: (o && o.storeName) || '',
       createdAt: c.createdAt,
@@ -1319,6 +1457,15 @@ async function adminMarkRefund(event) {
   const commissionId = String(event.commissionId || '')
   if (!commissionId) return { ok: false, code: 'BAD_COMMISSION' }
   const note = String(event.note || '').slice(0, 100)
+
+  // 渠道退款一旦发起，禁止再被标记线下已付，否则同一笔钱会被支付两次
+  const pre = await db.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
+  if (pre && pre.data && pre.data.refundId) {
+    return {
+      ok: false, code: 'CHANNEL_REFUND_EXISTS',
+      message: '该笔已发起微信退款，不能重复标记线下退款，请改用「同步状态」'
+    }
+  }
 
   const r = await db.collection(C.COMMISSION)
     .where({ _id: commissionId, status: _.in(['pending', 'processing', 'exception']) })
@@ -1340,6 +1487,115 @@ async function adminMarkRefund(event) {
   await settleLedger(cm.orderId, 'paid_out', 'OFFLINE_TRANSFER')
   await log('adminMarkRefund', { commissionId, note })
   return { ok: true }
+}
+
+// ---------- 渠道退款（真实微信支付）----------
+// 与「标记线下退款」是两条互斥路径：一旦走过渠道退款，就不允许再被人标记线下已付，
+// 否则同一笔钱会被支付两次。
+async function adminRefund(event) {
+  const commissionId = String(event.commissionId || '')
+  if (!commissionId) return { ok: false, code: 'BAD_COMMISSION' }
+  if (!wxpay.isConfigured()) {
+    return {
+      ok: false, code: 'PAY_NOT_CONFIGURED',
+      message: '微信支付参数未配置完整，缺少：' + wxpay.missing().join(', ')
+    }
+  }
+
+  const cmDoc = await db.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
+  if (!cmDoc || !cmDoc.data) return { ok: false, code: 'NOT_FOUND' }
+  const c = cmDoc.data
+  if (c.status === 'paid') return { ok: true, already: true, status: 'paid' }
+  if (c.status === 'void') return { ok: false, code: 'COMMISSION_VOID', message: '该佣金已作废（订单已取消）' }
+  if (c.status === 'processing') {
+    return { ok: false, code: 'REFUND_PROCESSING', message: '退款已在处理中，请点「同步状态」确认结果' }
+  }
+
+  const orderDoc = await db.collection(C.ORDER).doc(c.orderId).get().catch(() => null)
+  const o = orderDoc && orderDoc.data
+  if (!o) return { ok: false, code: 'ORDER_NOT_FOUND' }
+  if (!o.orderNo) return { ok: false, code: 'ORDER_NO_TRADE', message: '该订单没有支付单号，无法原路退款' }
+  if (o.paidSource === 'mock') {
+    return { ok: false, code: 'MOCK_ORDER', message: '该订单是演示支付产生的，没有真实资金可退' }
+  }
+
+  // 先抢占状态：pending/exception -> processing，避免两个管理员同时点导致重复退款
+  const lock = await db.collection(C.COMMISSION)
+    .where({ _id: commissionId, status: _.in(['pending', 'exception']) })
+    .update({ data: { status: 'processing', channelStatus: 'REFUND_REQUESTING', refundNo: 'RF' + c.orderId } })
+    .catch(() => ({ stats: { updated: 0 } }))
+  if (!lock.stats || lock.stats.updated === 0) {
+    return { ok: false, code: 'CONFLICT', message: '该笔佣金状态已变化，请刷新后重试' }
+  }
+
+  try {
+    const r = await wxpay.refund({
+      outTradeNo: o.orderNo,
+      outRefundNo: 'RF' + c.orderId,   // 确定性退款单号：同一单重复提交是幂等的
+      refundFen: c.amountFen,
+      totalFen: o.amountFen,
+      reason: '邀请达标返还'
+    })
+    await db.collection(C.COMMISSION).doc(commissionId).update({
+      data: {
+        channelStatus: r.status || 'PROCESSING',
+        refundId: r.refund_id || '',
+        refundAt: now(),
+        refundOperator: openid()
+      }
+    }).catch(() => {})
+    await settleLedger(c.orderId, 'in_flight', r.status || 'PROCESSING')
+    await log('adminRefund', { commissionId, refundId: r.refund_id, status: r.status })
+    return { ok: true, status: r.status || 'PROCESSING', refundId: r.refund_id || '' }
+  } catch (e) {
+    // 渠道明确拒绝：回落到 exception 让人工介入，不要把状态卡在 processing
+    await db.collection(C.COMMISSION).doc(commissionId).update({
+      data: {
+        status: 'exception',
+        channelStatus: 'REFUND_FAIL',
+        channelMessage: String(e.message || '').slice(0, 200)
+      }
+    }).catch(() => {})
+    await settleLedger(c.orderId, 'exception', 'REFUND_FAIL')
+    await log('adminRefund_fail', { commissionId, code: e.code || '', message: e.message })
+    return { ok: false, code: e.code || 'REFUND_FAIL', message: e.message }
+  }
+}
+
+// 同步退款结果：退款是异步的，微信先回「已受理」，最终结果要再查一次
+async function adminSyncRefund(event) {
+  const commissionId = String(event.commissionId || '')
+  if (!commissionId) return { ok: false, code: 'BAD_COMMISSION' }
+  if (!wxpay.isConfigured()) return { ok: false, code: 'PAY_NOT_CONFIGURED' }
+
+  const cmDoc = await db.collection(C.COMMISSION).doc(commissionId).get().catch(() => null)
+  if (!cmDoc || !cmDoc.data) return { ok: false, code: 'NOT_FOUND' }
+  const c = cmDoc.data
+  if (c.status === 'paid') return { ok: true, status: 'SUCCESS', already: true }
+
+  try {
+    const r = await wxpay.queryRefund(c.refundNo || ('RF' + c.orderId))
+    const st = r.status || 'PROCESSING'
+    if (st === 'SUCCESS') {
+      await db.collection(C.COMMISSION).doc(commissionId).update({
+        data: { status: 'paid', channelStatus: 'REFUND_SUCCESS', paidAt: now() }
+      }).catch(() => {})
+      await settleLedger(c.orderId, 'paid_out', 'REFUND_SUCCESS')
+    } else if (st === 'CLOSED' || st === 'ABNORMAL') {
+      await db.collection(C.COMMISSION).doc(commissionId).update({
+        data: { status: 'exception', channelStatus: st }
+      }).catch(() => {})
+      await settleLedger(c.orderId, 'exception', st)
+    } else {
+      await db.collection(C.COMMISSION).doc(commissionId).update({
+        data: { channelStatus: st, refundId: r.refund_id || c.refundId || '' }
+      }).catch(() => {})
+    }
+    await log('adminSyncRefund', { commissionId, status: st })
+    return { ok: true, status: st }
+  } catch (e) {
+    return { ok: false, code: e.code || 'WXPAY_ERROR', message: e.message }
+  }
 }
 
 // ---------- 查询 ----------
@@ -1776,6 +2032,19 @@ async function edgeTest() {
 
 // ---------- 路由 ----------
 exports.main = async (event) => {
+  // 微信支付回调：必须在解析 body 之前拦截。
+  // v3 的签名是对「原始报文字节」计算的，一旦被 JSON.parse 再序列化，签名就对不上。
+  const rawHeaders = (event && event.headers) || {}
+  let hasPaySig = false
+  for (const k of Object.keys(rawHeaders)) {
+    if (String(k).toLowerCase() === 'wechatpay-signature') { hasPaySig = true; break }
+  }
+  if (hasPaySig) {
+    const rawBody = typeof event.body === 'string' ? event.body : JSON.stringify(event.body || {})
+    __identity = { openid: null, source: 'wxpay_notify', isTest: false }
+    return await handlePayNotify(rawHeaders, rawBody)
+  }
+
   // 兼容两种调用：
   // 1) wx.cloud.callFunction：参数直接在 event 上
   // 2) HTTP 访问服务（小程序 wx.request）：参数在 event.body（JSON 字符串）
@@ -1797,6 +2066,7 @@ exports.main = async (event) => {
     'adminPosterInit', 'adminPosterChunk', 'adminPosterMerge', 'adminResetPoster',
     'adminSaveStore', 'adminDeleteStore',
     'adminRevoke', 'adminListAdmins', 'adminCommissions', 'adminMarkRefund',
+    'adminRefund', 'adminSyncRefund',
     'staffOrders', 'staffVerify', 'staffCancel', 'mockRefund',
     'seed', 'dashboard', 'ledger', 'e2eTest', 'edgeTest'
   ]
@@ -1855,7 +2125,11 @@ exports.main = async (event) => {
       case 'adminListAdmins': return await adminListAdmins()
       case 'adminCommissions': return await adminCommissions(e)
       case 'adminMarkRefund': return await adminMarkRefund(e)
+      case 'adminRefund': return await adminRefund(e)
+      case 'adminSyncRefund': return await adminSyncRefund(e)
       case 'createOrder': return await createOrder(e)
+      case 'prepay': return await prepay(e)
+      case 'payQuery': return await payQuery(e)
       case 'mockPay': return await mockPay(e)
       case 'mockRefund': return await mockRefund(e)
       case 'getInvitation': return await getInvitation(e)

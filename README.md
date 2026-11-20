@@ -220,7 +220,10 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 - [x] `ALLOW_SELF_TEST` 默认已关闭，自检接口不会清库
 - [ ] 确定管理员来源：跑一次首位自举写入 `admins`，或配置 `ADMIN_OPENIDS` 环境变量白名单
 - [ ] 配置 request 合法域名（当前靠「不校验合法域名」预览）
-- [ ] 微信认证 + 商户号，把 `mockPay` / `mockRefund` 换成微信支付 v3，并设 `MOCK_PAY_ENABLED=false`
+- [x] 微信支付 APIv3 已接入（prepay / 回调验签解密 / 渠道退款 / 主动查单），演示支付默认关闭
+- [ ] 注入 6 个支付变量 + `PAY_NOTIFY_URL`，用 1 分钱真单跑通支付与退款（见文末「微信支付 APIv3」）
+- [ ] 补超时关单定时触发器（`pending_pay` 目前不会自动关闭）
+- [ ] 「买三退一」用退款实现返现不符合微信支付协议，正式运营前改为商家转账或前置优惠
 - [ ] AppSecret 定期轮换（重置后同步云端环境变量）
 - [ ] 复核自定义 tabBar 仅按 `whoAmI().role` 渲染；注意**前端隐藏入口不构成安全边界**，所有敏感接口必须保留在 `ADMIN_ACTIONS` 里
 - [ ] 在 mp 后台「设置 → 服务内容声明 → 用户隐私保护指引」填写收集项（头像、昵称、位置），否则 `__usePrivacyCheck__` 打开后头像/昵称点不动
@@ -322,10 +325,61 @@ linyougo-dev-d0gkgswl0504c86e2-1534792212.ap-shanghai.app.tcloudbase.com
 - 规则版本：订单快照购买时 `ruleVersion`
 - 资金：`剩余可退 = 实付 − 已出款 − 在途占用`；已全额返佣时门店取消显示可退 0 元
 
-## 接真实微信支付（后续）
+## 微信支付 APIv3（2026-11-20 接入，普通商户直连）
 
-替换云函数中两处 mock：
-- `mockPay()` → 微信支付 v3 JSAPI 下单 + 支付结果回调验签
-- `mockRefund()` → 微信支付退款接口 + 退款回调验签（商户退款单号沿用 `refundNo`）
+已接真实支付，走**自建 v3 直连**（不使用云开发云支付）：云支付是服务商模式，订单挂在服务商名下，退款只能调 `cloudPay.refund`，换架构后历史订单就退不了；直连模式退款完全自主，也和自己库里的订单、佣金、流水对得上。
 
-需要：小程序微信认证 + 微信支付商户号 mch_id + API v3 密钥 + 商户证书序列号/私钥（放云函数环境变量，勿入前端）。
+### 需要的环境变量（云函数 `api`，全部走环境变量，不进代码）
+
+| 变量 | 说明 |
+|---|---|
+| `MCH_ID` | 商户号（普通商户） |
+| `MCH_SERIAL_NO` | 商户 API 证书序列号（40 位十六进制） |
+| `MCH_PRIVATE_KEY` | `apiclient_key.pem` 全文，换行可直接写 `\n` |
+| `APIV3_KEY` | 商户 APIv3 密钥（32 位），用于解密回调报文 |
+| `WXPAY_PUBLIC_KEY` | 微信支付公钥（`pub_key.pem` 全文） |
+| `WXPAY_PUBLIC_KEY_ID` | 微信支付公钥 ID（`PUB_KEY_ID_...`） |
+| `PAY_NOTIFY_URL` | 支付回调地址，公网 HTTPS、不带参数，指向本函数 HTTP 入口 |
+| `MOCK_PAY_ENABLED` | 可选，`true` 才开启演示支付。**默认关闭**：接入真实支付后必须保持不设置 |
+
+> 私钥与 APIv3 密钥都是「泄露即等于交出账户」的级别，只在 CloudBase 控制台注入，不要写入 `cloudbaserc.json`、不要提交 git。轮换密钥时记得同步更新环境变量。
+
+### 链路
+
+1. `createOrder` 建单（`pending_pay`，规则快照入库）
+2. `prepay` → v3 `/v3/pay/transactions/jsapi` 取 `prepay_id` → 服务端用商户私钥签出 `timeStamp/nonceStr/package/signType:RSA/paySign`
+3. 前端 `wx.requestPayment` 拉起收银台
+4. 微信异步回调 `handlePayNotify`：验签（微信支付公钥）→ 时间戳防重放 → AES-256-GCM 解密 → 校验商户号与金额 → `settlePaidOrder` 落库
+5. `settlePaidOrder` 复用原有逻辑：**先原子占库存（`stock>0`），再 CAS `pending_pay→paid`**，失败回补库存；成功后生成邀请码与受邀记录
+6. 回调丢失兜底：`payQuery` 主动查单并补落库（前端在 requestPayment 返回后调用）
+
+**前端回调不算数**：`wx.requestPayment` 的 success 只说明用户付了，订单状态一律以服务端查单/回调为准，避免被改包客户端骗成已支付。
+
+### 退款
+
+- `adminRefund`：v3 `/v3/refund/domestic/refunds`，退款单号 `RF<orderId>`（确定性、幂等），先把佣金 CAS 到 `processing` 防并发重复提交
+- `adminSyncRefund`：`/v3/refund/domestic/refunds/{no}` 查最终状态，`SUCCESS → paid`、`CLOSED/ABNORMAL → exception`
+- `adminMarkRefund`（线下标记）**与渠道退款互斥**：已发起渠道退款的佣金不允许再标记线下已付，否则同一笔钱付两次
+- 运营端「退款处理」页：`微信原路退款` / `同步退款状态` / `标记线下已退`
+
+### 已做的防护
+
+- 回调验签失败、金额不符、商户号不符：一律拒绝并落审计日志（`payNotify_*`），不会静默改单
+- 回调重推：`_id` 固定 + CAS，重复回调返回 `SUCCESS` 但不重复发佣金
+- 待支付订单可在订单详情页「继续支付」，避免用户取消支付后因「已有订单」永远无法再买
+
+### 还没做（上线前补）
+
+- **超时关单**：`pending_pay` 目前不会自动关闭，需要定时触发器调 `closeOrder` 并释放预占
+- **日对账**：v3 `/v3/bill/tradebill` 下载账单与本地流水核对
+- **合规警告**：「买三退一」用退款实现返现不符合微信支付协议（退款仅限退货/取消交易），合规做法是「商家转账到零钱」或前置优惠。当前代码保留退款路径用于调试，正式运营前必须改口径
+
+### 验证步骤（真实 1 分钱）
+
+1. 注入上表 6 个必填变量 + `PAY_NOTIFY_URL`，重新部署
+2. 小程序下单 → 应拉起真实收银台（不再弹「模拟支付」）
+3. 付 0.01 元 → 订单变待核销、库存 -1、生成邀请码
+4. 再付一次同一单 → 应被 CAS 拒绝，不会二次扣库存
+5. 运营端发起退款 → 几秒后「同步退款状态」应显示退款成功
+6. 到商户平台「交易账单」核对这笔单与退款都在
+

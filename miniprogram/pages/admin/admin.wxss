@@ -59,5 +59,7 @@
 .refund-summary-num { font-size:52rpx; font-weight:700; color:#e64545; }
 .refund-summary-label { font-size:24rpx; color:#888; margin-top:10rpx; }
 .refund-item { background:#fff; border-radius:16rpx; padding:26rpx; margin-bottom:18rpx; }
-.refund-actions { display:flex; justify-content:flex-end; margin-top:18rpx; }
+.refund-actions { display:flex; justify-content:flex-end; margin-top:18rpx; flex-wrap:wrap; gap:16rpx; }
 .refund-btn { font-size:26rpx; color:#fff; background:#07C160; padding:16rpx 34rpx; border-radius:10rpx; }
+.refund-btn.ghost { color:#576b95; background:#f2f4f7; }
+.refund-btn + .refund-btn { margin-left:16rpx; }
