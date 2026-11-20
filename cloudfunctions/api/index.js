@@ -895,7 +895,10 @@ async function adminDeleteStore(event) {
 }
 
 // ---------- 下单 ----------
-// 首版：每个小程序账号每场活动最多一笔有效订单；未支付关单释放资格
+// 允许同一账号在活动期内重复下单：每一单都是独立的一次参与，
+// 各自生成独立邀请码（INV_<orderId>）与独立佣金单（CM_<orderId>），互不影响。
+// 注意：放开限额后「N 单」就要「N × 达标人数」个有效受邀人才各自达标，
+// 不存在靠多下单白拿返佣的路径（佣金金额恒等于该单实付，且每单只发一次）。
 async function createOrder(event) {
   const { storeId, inviteCode } = event
   const oid = openid()
@@ -905,11 +908,8 @@ async function createOrder(event) {
   if (act.data.status !== 'ongoing') return { ok: false, code: 'ACTIVITY_ENDED' }
   if (now() > act.data.orderDeadline) return { ok: false, code: 'ORDER_DEADLINE_PASSED' }
 
-  // 查找是否有进行中/已支付订单，占用下单资格
-  const existed = await db.collection(C.ORDER).where({
-    buyer: oid, activityId: act.data._id, status: _.in(['pending_pay', 'paid', 'verified', 'cancel_processing'])
-  }).get()
-  if (existed.data.length > 0) return { ok: false, code: 'ALREADY_ORDERED', orderId: existed.data[0]._id }
+  // 不再校验「是否已有订单」：同一账号可重复参与，每单独立结算。
+  // 库存仍在下单时预检、支付时用 stock>0 条件原子扣减，多单不会超卖。
 
   // 校验邀请码（不允许自邀；邀请已作废或过期的码不再计入）
   let inviterId = null
