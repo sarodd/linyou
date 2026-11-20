@@ -64,7 +64,14 @@ const cert = readMaybe('apiclient_cert.pem')
 const key = readMaybe('apiclient_key.pem')
 const pub = readMaybe('pub_key.pem')
 
-const missingFiles = [cert, key, pub].filter((f) => !f.text).map((f) => f.name)
+// --check 只做自检：不要求 pub_key.pem，也不写任何文件、不打印私钥。
+// 证书包刚下载时通常还没有 pub_key.pem（那要去「管理公钥」单独下），
+// 这时也需要能先确认「证书 + 私钥 + 序列号」这一组是对的。
+const CHECK_ONLY = args.includes('--check')
+if (CHECK_ONLY) args.splice(args.indexOf('--check'), 1)
+
+const required = CHECK_ONLY ? [cert, key] : [cert, key, pub]
+const missingFiles = required.filter((f) => !f.text).map((f) => f.name)
 if (missingFiles.length) {
   die(
     '在 ' + dir + ' 里找不到：' + missingFiles.join('、') + '\n' +
@@ -101,12 +108,14 @@ const fromKey = crypto.createPublicKey(privateKey).export({ type: 'spki', format
 const fromCert = x509.publicKey.export({ type: 'spki', format: 'der' })
 const paired = Buffer.compare(fromKey, fromCert) === 0
 
-// ---- 4) 微信支付公钥能否解析 ----
-let pubKey
-try {
-  pubKey = crypto.createPublicKey(pub.text)
-} catch (e) {
-  die('pub_key.pem 不是有效的公钥：' + e.message)
+// ---- 4) 微信支付公钥能否解析（--check 时该文件可能还没下载） ----
+let pubKey = null
+if (pub.text) {
+  try {
+    pubKey = crypto.createPublicKey(pub.text)
+  } catch (e) {
+    die('pub_key.pem 不是有效的公钥：' + e.message)
+  }
 }
 
 const now = new Date()
@@ -121,13 +130,18 @@ if (expected) {
 }
 console.log('私钥算法   :', privateKey.asymmetricKeyType, privateKey.asymmetricKeyDetails ? privateKey.asymmetricKeyDetails.modulusLength + ' bit' : '')
 console.log('公私钥配对 :', paired ? '匹配' : '不匹配 —— 私钥和证书不是同一张，请重新申请证书')
-console.log('微信支付公钥:', pubKey.asymmetricKeyType)
+console.log('微信支付公钥:', pubKey ? pubKey.asymmetricKeyType : '(未提供 pub_key.pem，--check 模式下跳过)')
 if (expired) console.log('警告：证书已过期，签名会被微信拒绝，请重新申请。')
 if (!paired) process.exitCode = 2
 if (!serialMatched) {
   console.log('警告：你给的序列号与 apiclient_cert.pem 里的不一致。')
   console.log('      说明这个证书目录里放的不是平台当前登记的那一张，签名会返回 401 SIGN_ERROR。')
   if (process.exitCode === undefined) process.exitCode = 3
+}
+
+if (CHECK_ONLY) {
+  console.log('\n（--check 模式：只做自检，未写出任何文件、未打印私钥）\n')
+  process.exit(process.exitCode || 0)
 }
 
 // ---- 5) 输出环境变量 ----
