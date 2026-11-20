@@ -1124,30 +1124,37 @@ async function handlePayNotify(headers, rawBody) {
   const v = wxpay.verifyNotify(headers, rawBody)
   if (!v.ok) {
     await log('payNotify_verify_fail', v)
-    return { code: 'FAIL', message: 'signature verify failed' }
+    return payRetryable('signature verify failed')
   }
   let body = null
   try { body = JSON.parse(rawBody) } catch (e) {
-    return { code: 'FAIL', message: 'bad body' }
+    return payRetryable('bad body')
   }
   // 只处理支付成功事件，其他事件（如退款通知）直接确认，避免微信无意义重试
   if (body.event_type && body.event_type !== 'TRANSACTION.SUCCESS') {
-    return { code: 'SUCCESS', message: 'ignored' }
+    return payAck('ignored')
   }
   let data = null
   try { data = wxpay.decryptResource(body.resource) } catch (e) {
     await log('payNotify_decrypt_fail', { message: e.message })
-    return { code: 'FAIL', message: 'decrypt failed' }
+    return payRetryable('decrypt failed')
   }
   if (!data || data.trade_state !== 'SUCCESS') {
-    return { code: 'SUCCESS', message: 'not success' }
+    return payAck('not success')
   }
 
   const orderNo = data.out_trade_no
-  const found = await db.collection(C.ORDER).where({ orderNo }).limit(1).get().catch(() => ({ data: [] }))
+  let found = null
+  try {
+    found = await db.collection(C.ORDER).where({ orderNo }).limit(1).get()
+  } catch (err) {
+    // 数据库抖动当成可重试，不能吞掉当成「订单不存在」
+    await log('payNotify_db_error', { orderNo, message: err.message })
+    return payRetryable('db error')
+  }
   if (!found.data.length) {
     await log('payNotify_order_missing', { orderNo })
-    return { code: 'FAIL', message: 'order not found' }
+    return payAck('order not found', 'FAIL')
   }
   const order = found.data[0]
 
@@ -1155,18 +1162,49 @@ async function handlePayNotify(headers, rawBody) {
   const paidFen = data.amount && data.amount.total
   if (Number(paidFen) !== Number(order.amountFen)) {
     await log('payNotify_amount_mismatch', { orderId: order._id, paidFen, expectFen: order.amountFen })
-    return { code: 'FAIL', message: 'amount mismatch' }
+    return payAck('amount mismatch', 'FAIL')
   }
   // 商户号也要对：防止别的商户号的回调串进来（同一套回调地址复用时才会发生）
   if (wxpay.MCH_ID && data.mchid && data.mchid !== wxpay.MCH_ID) {
     await log('payNotify_mch_mismatch', { orderId: order._id, mchid: data.mchid })
-    return { code: 'FAIL', message: 'mchid mismatch' }
+    return payAck('mchid mismatch', 'FAIL')
   }
 
-  const r = await settlePaidOrder(order._id, { transactionId: data.transaction_id, source: 'wxpay' })
-  await log('payNotify', { orderId: order._id, ok: r.ok, code: r.code || '', transactionId: data.transaction_id })
-  // 已经处理过（回调重推）同样回 SUCCESS，否则微信会一直重试
-  return { code: 'SUCCESS', message: '成功' }
+  try {
+    const r = await settlePaidOrder(order._id, { transactionId: data.transaction_id, source: 'wxpay' })
+    await log('payNotify', { orderId: order._id, ok: r.ok, code: r.code || '', transactionId: data.transaction_id })
+    // 已经处理过（回调重推）同样回 SUCCESS，否则微信会一直重试
+    return payAck('成功')
+  } catch (err) {
+    // 落库异常必须让微信重试，否则钱收了、单没变，只能靠人工对账
+    await log('payNotify_settle_error', { orderId: order._id, message: err.message })
+    return payRetryable('settle failed')
+  }
+}
+
+/**
+ * 微信支付回调的应答格式。
+ *
+ * 关键点：微信只要收到 HTTP 200 就认为通知成功，不再重试（重试策略约 15 次 / 24 小时）。
+ * 因此「还能靠重试恢复」的错误（验签失败、解密失败、数据库异常、落库异常）必须返回
+ * 非 2xx，否则配置修好之后也不会补推，订单会永久停在待支付，且从用户视角是「钱付了没反应」。
+ * 反过来说，「重试也不会变」的确定性错误（金额不符、商户号不符、订单不存在）返回 200 止损，
+ * 但一律落审计日志，靠日志发现问题而不是靠微信无限重推。
+ */
+function payAck(message, code = 'SUCCESS') {
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, message })
+  }
+}
+
+function payRetryable(message) {
+  return {
+    statusCode: 500,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: 'FAIL', message })
+  }
 }
 
 function genInviteCode() {
